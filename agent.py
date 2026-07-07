@@ -147,13 +147,15 @@ if polecenie:
             placeholder.markdown(widoczny_tekst)
             st.session_state.chat_session.append({"role": "assistant", "content": full_response})
             
-            # Wyzwalacz Grafiki
+           # Wyzwalacz Grafiki
             if "GENERATE_IMAGE:" in full_response:
                 try:
                     prompt = full_response.split("GENERATE_IMAGE:")[1].strip()
-                    with st.spinner("🎨 Renderowanie grafiki 4K..."):
-                        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1920&height=1080&nologo=true&enhance=true"
-                        st.image(url, caption=f"Prompt: {prompt}", use_column_width=True)
+                    with st.spinner("🎨 Renderowanie precyzyjnej grafiki..."):
+                        # Usunięto 'enhance=true' oraz zmieniono rozdzielczość na 1024x1024
+                        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true"
+                        # Usunięto rozciąganie obrazu (use_column_width)
+                        st.image(url, caption=f"Prompt: {prompt}")
                 except:
                     st.error("Błąd generowania obrazu.")
                     
