@@ -4,3 +4,4 @@ PyPDF2
 pandas
 openpyxl
 fpdf2
+psycopg2-binary
