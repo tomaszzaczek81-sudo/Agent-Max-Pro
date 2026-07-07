@@ -7,38 +7,147 @@ import base64
 import pandas as pd
 import io
 import unicodedata
+import hashlib
+import psycopg2
+from psycopg2.extras import DictCursor
 from fpdf import FPDF
 from groq import Groq
 
 # ==========================================
-# 1. BEZPIECZNE LOGOWANIE
+# 1. POŁĄCZENIE I INICJALIZACJA BAZY (NEON)
 # ==========================================
-st.set_page_config(page_title="Agent AI Max Pro", layout="wide", page_icon="⚡")
+def pobierz_polaczenie_db():
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
 
-if "zalogowany" not in st.session_state:
-    st.session_state.zalogowany = False
+def inicjalizuj_baze_danych():
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    
+    # Tabela użytkowników
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS uzytkownicy (
+            id SERIAL PRIMARY KEY,
+            login TEXT UNIQUE NOT NULL,
+            haslo_hash TEXT NOT NULL,
+            rola TEXT NOT NULL
+        )
+    ''')
+    
+    # Tabela historii czatów przypisana do użytkownika
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS historia_czatow (
+            id SERIAL PRIMARY KEY,
+            uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE,
+            rola TEXT NOT NULL,
+            tresc TEXT NOT NULL,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    
+    # Tworzenie domyślnego admina z Secrets, jeśli baza jest pusta
+    cur.execute("SELECT COUNT(*) FROM uzytkownicy WHERE rola = 'admin'")
+    if cur.fetchone()[0] == 0:
+        login_admina = st.secrets["ADMIN_LOGIN"]
+        haslo_admina = st.secrets["ADMIN_PASSWORD"]
+        hash_hasla = hashlib.sha256(haslo_admina.encode()).hexdigest()
+        try:
+            cur.execute(
+                "INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)",
+                (login_admina, hash_hasla, 'admin')
+            )
+            conn.commit()
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            
+    cur.close()
+    conn.close()
 
-if not st.session_state.zalogowany:
-    st.title("🔒 Logowanie do Systemu AI")
-    login = st.text_input("Login")
-    haslo = st.text_input("Hasło", type="password")
-    if st.button("ZALOGUJ", type="primary"):
-        if login == "szef" and haslo == "taniec123":
-            st.session_state.zalogowany = True
-            st.rerun()
-        else:
-            st.error("Błędny login lub hasło!")
+# Uruchomienie struktury bazy danych
+try:
+    inicjalizuj_baze_danych()
+except Exception as e:
+    st.error(f"Błąd krytyczny połączenia z bazą Neon: {e}")
     st.stop()
 
 # ==========================================
-# 2. MIKROSILNIK WYSZUKIWANIA
+# 2. MECHANIZMY AUTORYZACJI I ZAPISU
+# ==========================================
+def weryfikuj_uzytkownika(login, haslo):
+    hash_hasla = hashlib.sha256(haslo.encode()).hexdigest()
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor(cursor_factory=DictCursor)
+    cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hash_hasla))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user
+
+def zapisz_wiadomosc_db(user_id, rola, tresc):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def pobierz_historie_db(user_id):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor(cursor_factory=DictCursor)
+    cur.execute("SELECT rola, tresc FROM historia_czatow WHERE uzytkownik_id = %s ORDER BY timestamp ASC", (user_id,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"role": r["rola"], "content": r["tresc"]} for r in rows]
+
+def wyczysc_historie_db(user_id):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+# ==========================================
+# 3. INTERFEJS LOGOWANIA
+# ==========================================
+if "user_auth" not in st.session_state:
+    st.session_state.user_auth = None
+
+if not st.session_state.user_auth:
+    st.title("🔒 Wielodostępny System AI")
+    st.markdown("Wprowadź swoje indywidualne dane dostępowe.")
+    
+    input_login = st.text_input("Login")
+    input_haslo = st.text_input("Hasło", type="password")
+    
+    if st.button("ZALOGUJ SIĘ", type="primary"):
+        uzytkownik = weryfikuj_uzytkownika(input_login, input_haslo)
+        if uzytkownik:
+            st.session_state.user_auth = {
+                "id": uzytkownik["id"],
+                "login": uzytkownik["login"],
+                "rola": uzytkownik["rola"]
+            }
+            st.rerun()
+        else:
+            st.error("Nieprawidłowy login lub hasło!")
+    st.stop()
+
+# Skróty zalogowanego profilu
+USER_ID = st.session_state.user_auth["id"]
+USER_LOGIN = st.session_state.user_auth["login"]
+USER_ROLA = st.session_state.user_auth["rola"]
+
+# ==========================================
+# 4. POMOCNICZY MIKROSILNIK SIECIOWY
 # ==========================================
 def bezpieczne_wyszukiwanie(zapytanie):
     wynik = ""
     if "pogod" in zapytanie.lower():
         try:
             miasta = re.findall(r'\b[A-Z][a-ząćęłńóśźż]+\b', zapytanie)
-            miasto = miasta[0] if miasta else zapytanie.split()[-1]
+            miasto = cities[0] if miasta else zapytanie.split()[-1]
             url = f"https://wttr.in/{urllib.parse.quote(miasto)}?format=3"
             req = urllib.request.Request(url, headers={'User-Agent': 'curl'})
             with urllib.request.urlopen(req, timeout=3) as res:
@@ -47,10 +156,7 @@ def bezpieczne_wyszukiwanie(zapytanie):
             
     try:
         url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(zapytanie)}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Accept-Language': 'pl-PL,pl;q=0.9'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=4) as res:
             html = res.read().decode('utf-8')
@@ -58,128 +164,189 @@ def bezpieczne_wyszukiwanie(zapytanie):
             if snippets:
                 wynik += "FAKTY Z INTERNETU:\n"
                 for snip in snippets[:3]:
-                    czysty_tekst = re.sub(r'<[^>]+>', '', snip)
-                    wynik += f"- {czysty_tekst.strip()}\n"
+                    wynik += f"- {re.sub(r'<[^>]+>', '', snip).strip()}\n"
     except: pass
-    if not wynik: return "Brak dostępu do sieci."
-    return wynik
+    return wynik if wynik else "Brak dostępu do sieci."
 
 # ==========================================
-# 3. KONFIGURACJA MÓZGU AI
+# 5. PANEL ADMINISTRATORA I PANEL BOCZNY
 # ==========================================
-client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-MODEL_TEXT = "llama-3.3-70b-versatile"
-MODEL_VISION = "llama-3.2-11b-vision-preview"
-
-instrukcja = (
-    "Jesteś elitarnym Agentem AI. Zawsze używaj języka polskiego.\n"
-    "1. Aktualności/Pogoda: Odpowiedz TYLKO 'SEARCH_WEB: [zapytanie]'.\n"
-    "2. Obrazy: Na końcu wypowiedzi dodaj 'GENERATE_IMAGE: [prompt angielski]'.\n"
-    "3. Excel: Jeśli użytkownik chce tabelę do pobrania, dodaj na końcu znacznik 'GENERATE_EXCEL:' a pod nim czyste dane w formacie CSV (kolumny oddzielone średnikiem, bez formatowania markdown).\n"
-    "4. PDF: Jeśli użytkownik chce wygenerować plik PDF, dodaj na końcu 'GENERATE_PDF:' a pod nim czysty tekst dokumentu."
-)
-
-# ==========================================
-# 4. INTERFEJS I PAMIĘĆ WIELOMODALNA
-# ==========================================
-st.sidebar.title("Witaj, Szefie! 👑")
+st.sidebar.title(f"Zalogowany: {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
-    st.session_state.zalogowany = False
+    st.session_state.user_auth = None
     st.rerun()
 
-st.title("⚡ Agent V10: AI, Vision & Pliki")
+# PANEL ADMINISTRATORA
+if USER_ROLA == "admin":
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
+        st.subheader("Zarządzanie użytkownikami")
+        
+        # Opcja 1: Dodawanie profilu
+        st.markdown("**Dodaj nowego użytkownika:**")
+        nowy_user = st.text_input("Nowy login", key="n_user")
+        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
+        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
+        
+        if st.button("UTWÓRZ KONTO"):
+            if nowy_user and nowe_haslo:
+                h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db()
+                cur = conn.cursor()
+                try:
+                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
+                    conn.commit()
+                    st.success(f"Konto {nowy_user} stworzone!")
+                except psycopg2.errors.UniqueViolation:
+                    st.error("Taki użytkownik już istnieje.")
+                    conn.rollback()
+                cur.close()
+                conn.close()
+                
+        st.markdown("---")
+        # Opcja 2: Usuwanie i edycja kont
+        st.markdown("**Zarządzaj istniejącymi:**")
+        conn = pobierz_polaczenie_db()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT login, rola FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+        lista_uzytkownikow = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        if lista_uzytkownikow:
+            wybrany_uzytkownik = st.selectbox("Wybierz konto", [u["login"] for u in lista_uzytkownikow])
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                zmien_haslo = st.text_input("Nowe hasło konta", type="password")
+                if st.button("ZAKODUJ NOWE HASŁO"):
+                    if zmien_haslo:
+                        h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                        conn = pobierz_polaczenie_db()
+                        cur = conn.cursor()
+                        cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                        st.success("Hasło zmienione!")
+            with col2:
+                if st.button("❌ USUŃ KONTO COMPLETELY", type="primary"):
+                    conn = pobierz_polaczenie_db()
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    st.success("Konto skasowane z bazy!")
+                    st.rerun()
+
+# SEKCJA PLIKÓW I SYSTEMU
+st.title("⚡ Agent V11: Multi-User System")
+st.caption("Napędzany: Llama 3.3 Turbo | Baza Danych: Neon Cloud (PostgreSQL)")
 
 if "doc_memory" not in st.session_state: st.session_state.doc_memory = ""
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 
 with st.sidebar:
     st.markdown("---")
-    st.subheader("👁️ Zmysły Agenta (Wgraj plik)")
+    st.subheader("👁️ Załaduj dokumentację")
     uploaded_file = st.file_uploader("Dodaj PDF, TXT lub Zdjęcie (JPG/PNG)", type=['pdf', 'txt', 'png', 'jpg', 'jpeg'])
-    
     if uploaded_file:
-        try:
-            if uploaded_file.type == "application/pdf":
-                reader = PyPDF2.PdfReader(uploaded_file)
-                st.session_state.doc_memory = "".join([page.extract_text() for page in reader.pages])
-                st.session_state.img_memory = None
-                st.success("Dokument wczytany!")
-            elif uploaded_file.type.startswith('image'):
-                img_bytes = uploaded_file.read()
-                st.session_state.img_memory = base64.b64encode(img_bytes).decode('utf-8')
-                st.session_state.doc_memory = ""
-                st.success("Obraz przeanalizowany, Agent go widzi!")
-            else:
-                st.session_state.doc_memory = uploaded_file.read().decode("utf-8")
-                st.session_state.img_memory = None
-                st.success("Tekst wczytany!")
-        except:
-            st.error("Błąd przetwarzania pliku.")
+        if uploaded_file.type == "application/pdf":
+            reader = PyPDF2.PdfReader(uploaded_file)
+            st.session_state.doc_memory = "".join([page.extract_text() for page in reader.pages])
+            st.session_state.img_memory = None
+            st.success("Dokument wgrany!")
+        elif uploaded_file.type.startswith('image'):
+            st.session_state.img_memory = base64.b64encode(uploaded_file.read()).decode('utf-8')
+            st.session_state.doc_memory = ""
+            st.success("Obraz wgrany!")
+        else:
+            st.session_state.doc_memory = uploaded_file.read().decode("utf-8")
+            st.session_state.img_memory = None
+            st.success("Tekst wgrany!")
 
-if "chat_session" not in st.session_state:
-    st.session_state.chat_session = [{"role": "system", "content": instrukcja}]
+    if st.button("🗑️ Wyczyść pamięć podręczną"):
+        st.session_state.doc_memory = ""
+        st.session_state.img_memory = None
+        st.success("Wyczyszczono pamięć dokumentów.")
+
+    if st.button("🧹 Resetuj moją historię rozmów"):
+        wyczysc_historie_db(USER_ID)
+        st.success("Historia wyczyszczona z bazy!")
+        st.rerun()
+
+# Ładowanie historii zalogowanego użytkownika bezpośrednio z PostgreSQL
+historia_czatu = pobierz_historie_db(USER_ID)
 
 # ==========================================
-# 5. LOGIKA CZATU I GENEROWANIE PLIKÓW
+# 6. LOGIKA OBSŁUGI CZATU I PLIKÓW
 # ==========================================
-for msg in st.session_state.chat_session:
-    if msg["role"] == "system": continue
-    if "KONTEKST Z WGRANEGO PLIKU:" in str(msg["content"]): continue
-    
+for msg in historia_czatu:
+    if msg["role"] == "user" and ("KONTEKST DOKUMENTU:" in str(msg["content"]) or "Oto informacje pobrane z internetu" in str(msg["content"])):
+        continue
     with st.chat_message(msg["role"]):
         text = str(msg["content"])
-        if "GENERATE_" in text:
-            text = text.split("GENERATE_IMAGE:")[0].split("GENERATE_EXCEL:")[0].split("GENERATE_PDF:")[0].strip()
+        if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
         if text: st.markdown(text)
 
-polecenie = st.chat_input("Napisz polecenie, wgraj zdjęcie z zadaniem lub każ stworzyć plik...")
+polecenie = st.chat_input("Zadaj pytanie Agentowi...")
 
 if polecenie:
-    st.session_state.chat_session.append({"role": "user", "content": polecenie})
+    # Zapisujemy czyste pytanie użytkownika w bazie danych
+    zapisz_wiadomosc_db(USER_ID, "user", polecenie)
     with st.chat_message("user"): st.markdown(polecenie)
         
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
         
-        # Tworzenie tymczasowej wiadomości API (żeby nie zapychać RAMu wielkim base64 na stałe)
-        api_messages = st.session_state.chat_session.copy()
-        model_to_use = MODEL_TEXT
+        # Przygotowanie pamięci kontekstowej dla API
+        instrukcja_sys = (
+            "Jesteś elitarnym Agentem AI. Zawsze używaj języka polskiego.\n"
+            "1. Aktualności/Pogoda: Odpowiedz TYLKO 'SEARCH_WEB: [zapytanie]'.\n"
+            "2. Obrazy: Na końcu wypowiedzi dodaj 'GENERATE_IMAGE: [prompt angielski]'.\n"
+            "3. Excel: Jeśli użytkownik chce tabelę, dodaj 'GENERATE_EXCEL:' a pod nim czysty CSV rozdzielany średnikami.\n"
+            "4. PDF: Jeśli użytkownik chce plik PDF, dodaj 'GENERATE_PDF:' a pod nim czysty tekst dokumentu."
+        )
+        api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
         
         if st.session_state.img_memory:
-            model_to_use = MODEL_VISION
-            api_messages[-1] = {
+            api_messages.append({
                 "role": "user",
                 "content": [
                     {"type": "text", "text": polecenie},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}
                 ]
-            }
+            })
         elif st.session_state.doc_memory:
-            api_messages[-1]["content"] = f"KONTEKST DOKUMENTU:\n{st.session_state.doc_memory}\n\nPYTANIE: {polecenie}"
+            api_messages.append({"role": "user", "content": f"KONTEKST DOKUMENTU:\n{st.session_state.doc_memory}\n\nPYTANIE: {polecenie}"})
+        else:
+            api_messages.append({"role": "user", "content": polecenie})
 
         try:
+            client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
-                model=model_to_use,
+                model="llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile",
                 messages=api_messages,
                 stream=True
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
-                    widoczny = full_response.split("GENERATE_")[0]
-                    placeholder.markdown(widoczny + "▌")
+                    placeholder.markdown(full_response.split("GENERATE_")[0] + "▌")
             
             widoczny = full_response.split("GENERATE_")[0].strip()
             placeholder.markdown(widoczny)
-            st.session_state.chat_session.append({"role": "assistant", "content": full_response})
             
-            # WYZWALACZ: Grafika
+            # Trwały zapis odpowiedzi bota do bazy danych Neon
+            zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
+            
+            # WYZWALACZE MULTIMEDIALNE
             if "GENERATE_IMAGE:" in full_response:
                 prompt = full_response.split("GENERATE_IMAGE:")[1].split("GENERATE_")[0].strip()
                 st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true")
                 
-            # WYZWALACZ: Tworzenie Excela
             if "GENERATE_EXCEL:" in full_response:
                 dane_csv = full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
                 df = pd.read_csv(io.StringIO(dane_csv), sep=";")
@@ -187,10 +354,8 @@ if polecenie:
                 df.to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button(label="📊 Pobierz plik Excel", data=buffer.getvalue(), file_name="Arkusz_Agent.xlsx", mime="application/vnd.ms-excel")
 
-            # WYZWALACZ: Tworzenie PDF
             if "GENERATE_PDF:" in full_response:
                 tekst_pdf = full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()
-                # Zabezpieczenie przed polskimi znakami (standardowa czcionka PDF ich nie czyta)
                 czysty_tekst = unicodedata.normalize('NFKD', tekst_pdf).encode('ascii', 'ignore').decode('utf-8')
                 pdf = FPDF()
                 pdf.add_page()
@@ -199,4 +364,4 @@ if polecenie:
                 st.download_button(label="📄 Pobierz plik PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument_Agent.pdf", mime="application/pdf")
                 
         except Exception as e:
-            st.error(f"Błąd operacji: {e}")
+            st.error(f"Problem operacyjny: {e}")
