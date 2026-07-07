@@ -65,8 +65,7 @@ def bezpieczne_wyszukiwanie(zapytanie):
 # 3. KONFIGURACJA MÓZGU AI (GROQ - Llama 3)
 # ==========================================
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-MODEL_NAME = "llama3-70b-8192"
-
+MODEL_NAME = "llama-3.3-70b-versatile"
 instrukcja = (
     "Jesteś elitarnym Agentem AI. Zawsze odpowiadaj w języku polskim. "
     "1. Jeśli użytkownik pyta o aktualne wydarzenia, pogodę, fakty, odpowiedz TYLKO jednym znacznikiem w nowej linii: 'SEARCH_WEB: [zapytanie]'. "
