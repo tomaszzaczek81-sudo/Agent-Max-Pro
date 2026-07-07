@@ -3,6 +3,11 @@ import urllib.parse
 import urllib.request
 import PyPDF2
 import re
+import base64
+import pandas as pd
+import io
+import unicodedata
+from fpdf import FPDF
 from groq import Groq
 
 # ==========================================
@@ -26,7 +31,7 @@ if not st.session_state.zalogowany:
     st.stop()
 
 # ==========================================
-# 2. MIKROSILNIK WYSZUKIWANIA (Anty-Bot)
+# 2. MIKROSILNIK WYSZUKIWANIA
 # ==========================================
 def bezpieczne_wyszukiwanie(zapytanie):
     wynik = ""
@@ -44,7 +49,7 @@ def bezpieczne_wyszukiwanie(zapytanie):
         url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(zapytanie)}"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-            'Accept-Language': 'pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7'
+            'Accept-Language': 'pl-PL,pl;q=0.9'
         }
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=4) as res:
@@ -56,129 +61,142 @@ def bezpieczne_wyszukiwanie(zapytanie):
                     czysty_tekst = re.sub(r'<[^>]+>', '', snip)
                     wynik += f"- {czysty_tekst.strip()}\n"
     except: pass
-        
-    if not wynik:
-        return "Brak dostępu do zewnętrznych serwisów."
+    if not wynik: return "Brak dostępu do sieci."
     return wynik
 
 # ==========================================
-# 3. KONFIGURACJA MÓZGU AI (GROQ - Llama 3)
+# 3. KONFIGURACJA MÓZGU AI
 # ==========================================
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-MODEL_NAME = "llama-3.3-70b-versatile"
+MODEL_TEXT = "llama-3.3-70b-versatile"
+MODEL_VISION = "llama-3.2-11b-vision-preview"
+
 instrukcja = (
-    "Jesteś elitarnym Agentem AI. Zawsze odpowiadaj w języku polskim. "
-    "1. Jeśli użytkownik pyta o aktualne wydarzenia, pogodę, fakty, odpowiedz TYLKO jednym znacznikiem w nowej linii: 'SEARCH_WEB: [zapytanie]'. "
-    "2. Jeśli prosi o grafikę, dodaj na końcu: 'GENERATE_IMAGE: [prompt angielski]'. "
-    "3. W innych przypadkach odpowiadaj normalnie, precyzyjnie i technicznie."
+    "Jesteś elitarnym Agentem AI. Zawsze używaj języka polskiego.\n"
+    "1. Aktualności/Pogoda: Odpowiedz TYLKO 'SEARCH_WEB: [zapytanie]'.\n"
+    "2. Obrazy: Na końcu wypowiedzi dodaj 'GENERATE_IMAGE: [prompt angielski]'.\n"
+    "3. Excel: Jeśli użytkownik chce tabelę do pobrania, dodaj na końcu znacznik 'GENERATE_EXCEL:' a pod nim czyste dane w formacie CSV (kolumny oddzielone średnikiem, bez formatowania markdown).\n"
+    "4. PDF: Jeśli użytkownik chce wygenerować plik PDF, dodaj na końcu 'GENERATE_PDF:' a pod nim czysty tekst dokumentu."
 )
 
 # ==========================================
-# 4. INTERFEJS I PAMIĘĆ LOKALNA
+# 4. INTERFEJS I PAMIĘĆ WIELOMODALNA
 # ==========================================
 st.sidebar.title("Witaj, Szefie! 👑")
 if st.sidebar.button("Wyloguj", type="secondary"):
     st.session_state.zalogowany = False
     st.rerun()
 
-st.title("⚡ Wszechstronny Agent AI Max Pro (Groq V8)")
-st.caption("Moduły: Llama 3 Turbo | Niezależna Wyszukiwarka | Generator Grafiki 4K")
+st.title("⚡ Agent V10: AI, Vision & Pliki")
 
 if "doc_memory" not in st.session_state: st.session_state.doc_memory = ""
+if "img_memory" not in st.session_state: st.session_state.img_memory = None
+
 with st.sidebar:
     st.markdown("---")
-    st.subheader("🧠 Pamięć długotrwała")
-    uploaded_file = st.file_uploader("Wgraj plik (PDF/TXT)", type=['pdf', 'txt'])
+    st.subheader("👁️ Zmysły Agenta (Wgraj plik)")
+    uploaded_file = st.file_uploader("Dodaj PDF, TXT lub Zdjęcie (JPG/PNG)", type=['pdf', 'txt', 'png', 'jpg', 'jpeg'])
+    
     if uploaded_file:
         try:
             if uploaded_file.type == "application/pdf":
                 reader = PyPDF2.PdfReader(uploaded_file)
                 st.session_state.doc_memory = "".join([page.extract_text() for page in reader.pages])
+                st.session_state.img_memory = None
+                st.success("Dokument wczytany!")
+            elif uploaded_file.type.startswith('image'):
+                img_bytes = uploaded_file.read()
+                st.session_state.img_memory = base64.b64encode(img_bytes).decode('utf-8')
+                st.session_state.doc_memory = ""
+                st.success("Obraz przeanalizowany, Agent go widzi!")
             else:
                 st.session_state.doc_memory = uploaded_file.read().decode("utf-8")
-            st.success("Dokument wgrany do pamięci!")
+                st.session_state.img_memory = None
+                st.success("Tekst wczytany!")
         except:
-            st.error("Błąd odczytu pliku.")
+            st.error("Błąd przetwarzania pliku.")
 
 if "chat_session" not in st.session_state:
     st.session_state.chat_session = [{"role": "system", "content": instrukcja}]
 
 # ==========================================
-# 5. SILNIK LOGIKI I STREAMINGU GROQ
+# 5. LOGIKA CZATU I GENEROWANIE PLIKÓW
 # ==========================================
 for msg in st.session_state.chat_session:
     if msg["role"] == "system": continue
-    if msg["role"] == "user" and ("Oto informacje pobrane z internetu" in msg["content"] or "KONTEKST Z WGRANEGO PLIKU" in msg["content"]): continue
+    if "KONTEKST Z WGRANEGO PLIKU:" in str(msg["content"]): continue
     
     with st.chat_message(msg["role"]):
-        text = msg["content"]
-        if "GENERATE_IMAGE:" in text: text = text.split("GENERATE_IMAGE:")[0].strip()
-        if "SEARCH_WEB:" in text: text = text.split("SEARCH_WEB:")[0].strip()
+        text = str(msg["content"])
+        if "GENERATE_" in text:
+            text = text.split("GENERATE_IMAGE:")[0].split("GENERATE_EXCEL:")[0].split("GENERATE_PDF:")[0].strip()
         if text: st.markdown(text)
 
-polecenie = st.chat_input("Napisz polecenie, zapytaj o wiadomości lub stwórz grafikę...")
+polecenie = st.chat_input("Napisz polecenie, wgraj zdjęcie z zadaniem lub każ stworzyć plik...")
 
 if polecenie:
-    zapytanie_wysylane = polecenie
-    if st.session_state.doc_memory:
-        zapytanie_wysylane = f"KONTEKST Z WGRANEGO PLIKU: {st.session_state.doc_memory}\n\nPYTANIE UŻYTKOWNIKA: {polecenie}"
-        
-    st.session_state.chat_session.append({"role": "user", "content": zapytanie_wysylane})
+    st.session_state.chat_session.append({"role": "user", "content": polecenie})
     with st.chat_message("user"): st.markdown(polecenie)
         
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
         
+        # Tworzenie tymczasowej wiadomości API (żeby nie zapychać RAMu wielkim base64 na stałe)
+        api_messages = st.session_state.chat_session.copy()
+        model_to_use = MODEL_TEXT
+        
+        if st.session_state.img_memory:
+            model_to_use = MODEL_VISION
+            api_messages[-1] = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": polecenie},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}
+                ]
+            }
+        elif st.session_state.doc_memory:
+            api_messages[-1]["content"] = f"KONTEKST DOKUMENTU:\n{st.session_state.doc_memory}\n\nPYTANIE: {polecenie}"
+
         try:
             stream = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=st.session_state.chat_session,
-                stream=True,
-                temperature=0.5
+                model=model_to_use,
+                messages=api_messages,
+                stream=True
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
-                    widoczny_tekst = full_response.split("GENERATE_IMAGE:")[0].split("SEARCH_WEB:")[0]
-                    placeholder.markdown(widoczny_tekst + "▌")
+                    widoczny = full_response.split("GENERATE_")[0]
+                    placeholder.markdown(widoczny + "▌")
             
-            widoczny_tekst = full_response.split("GENERATE_IMAGE:")[0].split("SEARCH_WEB:")[0].strip()
-            placeholder.markdown(widoczny_tekst)
+            widoczny = full_response.split("GENERATE_")[0].strip()
+            placeholder.markdown(widoczny)
             st.session_state.chat_session.append({"role": "assistant", "content": full_response})
             
-           # Wyzwalacz Grafiki
+            # WYZWALACZ: Grafika
             if "GENERATE_IMAGE:" in full_response:
-                try:
-                    prompt = full_response.split("GENERATE_IMAGE:")[1].strip()
-                    with st.spinner("🎨 Renderowanie precyzyjnej grafiki..."):
-                        # Usunięto 'enhance=true' oraz zmieniono rozdzielczość na 1024x1024
-                        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true"
-                        # Usunięto rozciąganie obrazu (use_column_width)
-                        st.image(url, caption=f"Prompt: {prompt}")
-                except:
-                    st.error("Błąd generowania obrazu.")
-                    
-            # Wyzwalacz Wyszukiwarki
-            elif "SEARCH_WEB:" in full_response:
-                haslo_szukane = full_response.split("SEARCH_WEB:")[1].strip()
-                with st.spinner(f"🌐 Skanuję sieć błyskawicznie: '{haslo_szukane}'..."):
-                    dane_z_sieci = bezpieczne_wyszukiwanie(haslo_szukane)
-                    nowy_prompt = f"Oto informacje pobrane z internetu dla '{haslo_szukane}':\n\n{dane_z_sieci}\n\nOdpowiedz na moje pytanie bazując na tych danych."
-                    st.session_state.chat_session.append({"role": "user", "content": nowy_prompt})
-                    
-                    odpowiedz_z_sieci = client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=st.session_state.chat_session,
-                        stream=True
-                    )
-                    pelna_odpowiedz_siec = ""
-                    for chunk in odpowiedz_z_sieci:
-                        if chunk.choices[0].delta.content:
-                            pelna_odpowiedz_siec += chunk.choices[0].delta.content
-                            placeholder.markdown(pelna_odpowiedz_siec + "▌")
-                    placeholder.markdown(pelna_odpowiedz_siec)
-                    st.session_state.chat_session.append({"role": "assistant", "content": pelna_odpowiedz_siec})
-                    
+                prompt = full_response.split("GENERATE_IMAGE:")[1].split("GENERATE_")[0].strip()
+                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true")
+                
+            # WYZWALACZ: Tworzenie Excela
+            if "GENERATE_EXCEL:" in full_response:
+                dane_csv = full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
+                df = pd.read_csv(io.StringIO(dane_csv), sep=";")
+                buffer = io.BytesIO()
+                df.to_excel(buffer, index=False, engine='openpyxl')
+                st.download_button(label="📊 Pobierz plik Excel", data=buffer.getvalue(), file_name="Arkusz_Agent.xlsx", mime="application/vnd.ms-excel")
+
+            # WYZWALACZ: Tworzenie PDF
+            if "GENERATE_PDF:" in full_response:
+                tekst_pdf = full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()
+                # Zabezpieczenie przed polskimi znakami (standardowa czcionka PDF ich nie czyta)
+                czysty_tekst = unicodedata.normalize('NFKD', tekst_pdf).encode('ascii', 'ignore').decode('utf-8')
+                pdf = FPDF()
+                pdf.add_page()
+                pdf.set_font("Arial", size=12)
+                pdf.multi_cell(0, 10, txt=czysty_tekst)
+                st.download_button(label="📄 Pobierz plik PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument_Agent.pdf", mime="application/pdf")
+                
         except Exception as e:
-            st.error(f"System napotkał problem: {e}")
+            st.error(f"Błąd operacji: {e}")
