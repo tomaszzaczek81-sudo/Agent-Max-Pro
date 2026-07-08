@@ -15,6 +15,7 @@ from groq import Groq
 from audio_recorder_streamlit import audio_recorder
 import requests
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -32,62 +33,27 @@ apple_theme_css = """
         background-color: #1E1E1F !important;
         border-right: 1px solid #333336;
     }
-    h1, h2, h3 {
-        color: #FFFFFF !important;
-        font-weight: 600 !important;
-        letter-spacing: -0.022em !important;
-    }
+    h1, h2, h3 { color: #FFFFFF !important; font-weight: 600 !important; letter-spacing: -0.022em !important; }
     .stButton>button {
-        background-color: #2D2D2F;
-        color: #F5F5F7;
-        border: 1px solid #424245;
-        border-radius: 8px;
-        padding: 8px 16px;
-        font-weight: 500;
-        transition: all 0.2s ease;
+        background-color: #2D2D2F; color: #F5F5F7; border: 1px solid #424245; border-radius: 8px;
+        padding: 8px 16px; font-weight: 500; transition: all 0.2s ease;
     }
-    .stButton>button:hover {
-        background-color: #3A3A3C;
-        border-color: #68686E;
-        color: #FFFFFF;
+    .stButton>button:hover { background-color: #3A3A3C; border-color: #68686E; color: #FFFFFF; }
+    .stButton>button[data-testid="baseButton-primary"] { background-color: #0071E3 !important; border: none !important; color: #FFFFFF !important; }
+    .stButton>button[data-testid="baseButton-primary"]:hover { background-color: #147CE5 !important; box-shadow: 0 0 8px rgba(0,113,227,0.4); }
+    .stTextInput>div>div>input, .stSelectbox>div>div>div, .stTextArea>div>div>textarea {
+        background-color: #1E1E1F !important; color: #FFFFFF !important; border: 1px solid #424245 !important; border-radius: 8px !important;
     }
-    .stButton>button[data-testid="baseButton-primary"] {
-        background-color: #0071E3 !important;
-        border: none !important;
-        color: #FFFFFF !important;
-    }
-    .stButton>button[data-testid="baseButton-primary"]:hover {
-        background-color: #147CE5 !important;
-        box-shadow: 0 0 8px rgba(0,113,227,0.4);
-    }
-    .stTextInput>div>div>input, .stSelectbox>div>div>div {
-        background-color: #1E1E1F !important;
-        color: #FFFFFF !important;
-        border: 1px solid #424245 !important;
-        border-radius: 8px !important;
-    }
-    .stTextInput>div>div>input:focus {
-        border-color: #0071E3 !important;
-        box-shadow: 0 0 0 3px rgba(0,113,227,0.2) !important;
-    }
-    [data-testid="stChatMessage"] {
-        background-color: #1E1E1F !important;
-        border: 1px solid #2D2D2F !important;
-        border-radius: 12px !important;
-        padding: 16px !important;
-        margin-bottom: 12px !important;
-    }
-    .stDetails {
-        background-color: #1E1E1F !important;
-        border: 1px solid #2D2D2F !important;
-        border-radius: 12px !important;
-    }
+    .stTextInput>div>div>input:focus, .stTextArea>div>div>textarea:focus { border-color: #0071E3 !important; box-shadow: 0 0 0 3px rgba(0,113,227,0.2) !important; }
+    [data-testid="stChatMessage"] { background-color: #1E1E1F !important; border: 1px solid #2D2D2F !important; border-radius: 12px !important; padding: 16px !important; margin-bottom: 12px !important; }
+    .stDetails { background-color: #1E1E1F !important; border: 1px solid #2D2D2F !important; border-radius: 12px !important; }
+    .myśli-agenta { font-size: 0.85em; color: #86868B; border-left: 2px solid #0071E3; padding-left: 10px; font-style: italic; margin-bottom: 15px;}
 </style>
 """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. POŁĄCZENIE I INICJALIZACJA BAZY
+# 2. POŁĄCZENIE I INICJALIZACJA BAZY (W TYM NOWE FUNKCJE V15)
 # ==========================================
 def pobierz_polaczenie_db():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -98,6 +64,9 @@ def inicjalizuj_baze_danych():
     cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
+    # NOWE TABELE V15: Preferencje i Harmonogram
+    cur.execute('''CREATE TABLE IF NOT EXISTS preferencje_uzytkownika (uzytkownik_id INTEGER PRIMARY KEY, profil TEXT)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS zadania_cykliczne (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER, url TEXT)''')
     conn.commit()
     
     cur.execute("SELECT COUNT(*) FROM uzytkownicy WHERE rola = 'admin'")
@@ -113,7 +82,7 @@ try: inicjalizuj_baze_danych()
 except Exception as e: st.error(f"Błąd bazy: {e}"); st.stop()
 
 # ==========================================
-# 3. MECHANIZMY SYSTEMOWE I AUTORYZACJA
+# 3. MECHANIZMY SYSTEMOWE (AUTORYZACJA, RAG, WEB SCRAPING)
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
     conn = pobierz_polaczenie_db()
@@ -159,7 +128,7 @@ def szukaj_w_bazie_wiedzy(zapytanie):
     cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
     wyniki = cur.fetchall()
     cur.close(); conn.close()
-    if wyniki: return "\n\n".join([f"[Źródło: {w[0]}]: {w[1][:1500]}" for w in wyniki])
+    if wyniki: return "\n\n".join([f"[Źródło bazy wiedzy: {w[0]}]: {w[1][:1500]}" for w in wyniki])
     return ""
 
 def pobierz_tekst_z_url(url):
@@ -171,6 +140,23 @@ def pobierz_tekst_z_url(url):
         for script in soup(["script", "style", "nav", "footer"]): script.extract()
         return soup.get_text(separator=' ', strip=True)
     except Exception as e: return f"BŁĄD: {e}"
+
+# FUNKCJE DLA PAMIĘCI EPIZODYCZNEJ
+def pobierz_profil(user_id):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    cur.execute("SELECT profil FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
+    res = cur.fetchone()
+    cur.close(); conn.close()
+    return res[0] if res else ""
+
+def zapisz_profil(user_id, profil):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
+    if cur.fetchone(): cur.execute("UPDATE preferencje_uzytkownika SET profil = %s WHERE uzytkownik_id = %s", (profil, user_id))
+    else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
+    conn.commit(); cur.close(); conn.close()
 
 # ==========================================
 # 4. INTERFEJS LOGOWANIA
@@ -193,18 +179,15 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. PANEL ADMINISTRATORA I TRYBY EKSPERCKIE
+# 5. PANEL BOCZNY (WSZYSTKIE MODUŁY V15)
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
-if st.sidebar.button("Wyloguj", type="secondary"):
-    st.session_state.user_auth = None; st.rerun()
+if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
+# PANEL ADMINISTRATORA (Ukryty dla zwykłych użytkowników)
 if USER_ROLA == "admin":
     st.sidebar.markdown("---")
     with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
-        st.subheader("Zarządzanie użytkownikami")
-        
-        st.markdown("**Dodaj nowego użytkownika:**")
         nowy_user = st.text_input("Nowy login", key="n_user")
         nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
         nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
@@ -216,208 +199,217 @@ if USER_ROLA == "admin":
                 try:
                     cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
                     conn.commit()
-                    st.success(f"Konto {nowy_user} stworzone!")
-                except psycopg2.errors.UniqueViolation:
-                    st.error("Taki użytkownik już istnieje.")
-                    conn.rollback()
+                    st.success("Konto stworzone!")
+                except: st.error("Taki użytkownik już istnieje.")
                 cur.close(); conn.close()
-                
         st.markdown("---")
-        st.markdown("**Zarządzaj istniejącymi kontami:**")
         conn = pobierz_polaczenie_db()
         cur = conn.cursor(cursor_factory=DictCursor)
-        cur.execute("SELECT login, rola FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+        cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
         lista_uzytkownikow = cur.fetchall()
         cur.close(); conn.close()
-        
         if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Wybierz konto do modyfikacji", [u["login"] for u in lista_uzytkownikow])
+            wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
             zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
-            if st.button("ZAKODUJ NOWE HASŁO"):
-                if zmien_haslo:
-                    h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
-                    conn = pobierz_polaczenie_db()
-                    cur = conn.cursor()
-                    cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
-                    conn.commit()
-                    cur.close(); conn.close()
-                    st.success("Hasło użytkownika zmienione!")
+            if st.button("ZMIEŃ HASŁO"):
+                h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
             if st.button("❌ USUŃ KONTO", type="primary"):
-                conn = pobierz_polaczenie_db()
-                cur = conn.cursor()
+                conn = pobierz_polaczenie_db(); cur = conn.cursor()
                 cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
-                conn.commit()
-                cur.close(); conn.close()
-                st.success("Konto skasowane z bazy!")
-                st.rerun()
-
-        st.markdown("---")
-        st.markdown("**Twoje własne konto (Administrator):**")
-        moj_nowy_login = st.text_input("Twój nowy login", value=USER_LOGIN, key="admin_login_new")
-        moje_nowe_haslo = st.text_input("Twoje nowe hasło (zostaw puste, aby nie zmieniać)", type="password", key="admin_pass")
-        if st.button("ZAKTUALIZUJ MOJE DANE"):
-            if moj_nowy_login:
-                conn = pobierz_polaczenie_db()
-                cur = conn.cursor()
-                try:
-                    if moje_nowe_haslo:
-                        h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
-                        cur.execute("UPDATE uzytkownicy SET login = %s, haslo_hash = %s WHERE id = %s", (moj_nowy_login, h_hash, USER_ID))
-                    else:
-                        cur.execute("UPDATE uzytkownicy SET login = %s WHERE id = %s", (moj_nowy_login, USER_ID))
-                    conn.commit()
-                    st.session_state.user_auth["login"] = moj_nowy_login
-                    st.success("Dane zaktualizowane!")
-                    st.rerun()
-                except psycopg2.errors.UniqueViolation:
-                    st.error("Ten login jest już zajęty!")
-                    conn.rollback()
-                finally:
-                    cur.close(); conn.close()
+                conn.commit(); cur.close(); conn.close(); st.rerun()
 
 st.sidebar.markdown("---")
+# WŁĄCZNIK AGENTIC WORKFLOW (Opcja 1)
+agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Samoweryfikacja)", value=False, help="Agent będzie analizował swoje błędy przed podaniem odpowiedzi.")
+
+# OSOBISTOŚCI
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "🚀 Ekspert LinkedIn (Marka Osobista)": (
-        "Jesteś wybitnym copywriterem i ekspertem od personal brandingu na platformie LinkedIn. "
-        "Twoim zadaniem jest pisanie angażujących, profesjonalnych postów i artykułów. "
-        "Twórz chwytliwe nagłówki, używaj odpowiedniego formatowania (akapity, punktory) i biznesowych emoji. "
-        "Skup się na merytoryce, zwłaszcza w obszarach technologii, optymalizacji logistyki i rozwoju oprogramowania. "
-        "Zawsze kończ post wyraźnym wezwaniem do dyskusji (Call to Action) oraz dobieraj trafne hashtagi. "
-        "Ton ma być profesjonalny, ale naturalny i autentyczny."
-    ),
-    "✍️ Inżynier Promptów (PL/ENG)": (
-        "Jesteś światowej klasy Inżynierem Promptów. Twoim jedynym zadaniem jest tworzenie potężnych, "
-        "precyzyjnych i skutecznych promptów strukturalnych dla modeli LLM. "
-        "Wygeneruj profesjonalny prompt po polsku, a następnie przetłumacz go na wersję angielską."
-    ),
-    "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP. Pisz czysty kod, myśl strukturalnie.",
-    "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki. Skup się na dynamice i technice rzutu.",
-    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej (grupa VAG). Podawaj precyzyjne diagnozy."
+    "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn. Używaj emoji, hashtagów i formatowania pod social media.",
+    "✍️ Inżynier Promptów": "Jesteś światowej klasy Inżynierem Promptów. Twórz precyzyjne struktury promptów (PL/ENG).",
+    "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP.",
+    "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki.",
+    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej (grupa VAG)."
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
-    plik_kb = st.file_uploader("Wgraj z dysku (PDF/TXT)", type=['pdf', 'txt'], key="kb_upload")
-    if plik_kb and st.button("💾 Zapisz Plik w Bazie"):
-        tresc = ""
-        if plik_kb.type == "application/pdf":
-            reader = PyPDF2.PdfReader(plik_kb)
-            tresc = "".join([page.extract_text() for page in reader.pages])
-        else: tresc = plik_kb.read().decode("utf-8")
+# PAMIĘĆ EPIZODYCZNA (Opcja 2)
+with st.sidebar.expander("👤 Mój Profil (Pamięć Epizodyczna)", expanded=False):
+    st.caption("Napisz, jak Agent ma się do Ciebie zwracać i jakie zasady ma zawsze pamiętać.")
+    aktualny_profil = pobierz_profil(USER_ID)
+    nowy_profil = st.text_area("Twój unikalny profil:", value=aktualny_profil, height=150)
+    if st.button("Zapisz w Pamięci Agenta"):
+        zapisz_profil(USER_ID, nowy_profil)
+        st.success("Profil zaktualizowany!")
+
+# BAZA WIEDZY I SCHEDULER (Opcja 3)
+with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
+    plik_kb = st.file_uploader("Wgraj plik (PDF/TXT)", type=['pdf', 'txt'])
+    if plik_kb and st.button("💾 Zapisz Plik"):
+        tresc = "".join([page.extract_text() for page in PyPDF2.PdfReader(plik_kb).pages]) if plik_kb.type == "application/pdf" else plik_kb.read().decode("utf-8")
         dodaj_do_bazy_wiedzy(plik_kb.name, tresc)
         st.success("Plik zapisany!")
-
+    
     st.markdown("---")
-    st.markdown("**Skanuj stronę internetową:**")
-    url_do_bazy = st.text_input("Wklej pełny link (np. https://...)")
-    if st.button("🔗 Skanuj i Zapisz URL"):
-        if url_do_bazy.startswith("http"):
-            with st.spinner("🕷️ Skanuję..."):
-                tekst_ze_strony = pobierz_tekst_z_url(url_do_bazy)
-                if not tekst_ze_strony.startswith("BŁĄD"):
-                    dodaj_do_bazy_wiedzy(url_do_bazy, tekst_ze_strony)
-                    st.success("✅ Strona zgrana!")
-                else: st.error("Błąd pobierania danych.")
+    st.markdown("**Dodaj Auto-Skanowanie URL:**")
+    url_do_zadania = st.text_input("Link do śledzenia (https://...)")
+    if st.button("Dodaj do kolejki zadań"):
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("INSERT INTO zadania_cykliczne (uzytkownik_id, url) VALUES (%s, %s)", (USER_ID, url_do_zadania))
+        conn.commit(); cur.close(); conn.close(); st.success("Dodano do kolejki!")
+    
+    if st.button("▶️ Uruchom zadania z kolejki"):
+        with st.spinner("Agent skanuje zaplanowane strony w tle..."):
+            conn = pobierz_polaczenie_db(); cur = conn.cursor()
+            cur.execute("SELECT id, url FROM zadania_cykliczne WHERE uzytkownik_id = %s", (USER_ID,))
+            zadania = cur.fetchall()
+            for z in zadania:
+                tekst = pobierz_tekst_z_url(z[1])
+                if not tekst.startswith("BŁĄD"): dodaj_do_bazy_wiedzy(z[1], tekst)
+                cur.execute("DELETE FROM zadania_cykliczne WHERE id = %s", (z[0],)) # Usuwa zadanie po wykonaniu
+            conn.commit(); cur.close(); conn.close()
+            st.success("Wszystkie zadania z kolejki wykonane!")
 
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro")
-st.caption("System: Enterprise Model Suite | Design Style: Apple Midnight Minimalist")
+st.title("⚡ Agent AI Max Pro V15")
+st.caption("System: Ultimate Autonomous Edition | Apple Design | Live Web Search")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
     st.markdown("---")
-    st.subheader("👁️ Zmysł Wzroku")
-    zdjecie = st.file_uploader("Dodaj Zdjęcie do analizy", type=['png', 'jpg', 'jpeg'])
+    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
     if zdjecie:
         st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
         st.success("Obraz wgrany!")
-    if st.button("🧹 Resetuj rozmowę"):
-        wyczysc_historie_db(USER_ID); st.rerun()
+    if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.rerun()
 
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
-    if msg["role"] == "user" and "DODATKOWY KONTEKST Z BAZY WIEDZY:" in str(msg["content"]): continue
+    if msg["role"] == "user" and "KONTEKST SYSTEMOWY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
         text = str(msg["content"])
         if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
-        if text: st.markdown(text)
+        
+        # Wyświetlanie formatowanego bloku przemyśleń (Agentic Workflow)
+        if "<mysli>" in text and "</mysli>" in text:
+            mysli = text.split("<mysli>")[1].split("</mysli>")[0].strip()
+            odpowiedz = text.split("</mysli>")[1].strip()
+            with st.expander("Zobacz proces myślowy Agenta", expanded=False):
+                st.markdown(f"<div class='myśli-agenta'>{mysli}</div>", unsafe_allow_html=True)
+            st.markdown(odpowiedz)
+        else:
+            st.markdown(text)
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic:
     audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
 with col_input:
-    polecenie_tekst = st.chat_input("Zadaj pytanie, każ stworzyć pliki lub podyktuj polecenie...")
-
-polecenie = polecenie_tekst
+    polecenie = st.chat_input("Zadaj pytanie (zapytaj o dzisiejsze wydarzenia), wygeneruj plik...")
 
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
-    with st.spinner("🎧 Transkrybuję głos..."):
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    with st.spinner("🎧 Transkrybuję..."):
         try:
-            transkrypcja = client.audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
-            polecenie = transkrypcja
-        except Exception: st.error("Błąd wejścia audio.")
+            polecenie = Groq(api_key=st.secrets["GROQ_API_KEY"]).audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
+        except Exception: st.error("Błąd mikrofonu.")
 
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
-    zapytanie_do_wyslania = polecenie
+    kontekst_web = ""
     
-    if kontekst_kb:
-        zapytanie_do_wyslania = f"DODATKOWY KONTEKST Z BAZY WIEDZY:\n{kontekst_kb}\n\nPYTANIE: {polecenie}"
-        st.toast("Pomyślnie zsynchronizowano dane z Bazy Wiedzy!", icon="🌐")
+    # NAPRAWA BŁĘDU ZE SCREENA: Moduł Inteligencji Czasu Rzeczywistego (DuckDuckGo)
+    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "aktualności"]
+    if any(s in polecenie.lower() for s in slowa_czasowe):
+        with st.spinner("🌍 Przeszukuję internet w czasie rzeczywistym..."):
+            try:
+                wyniki_ddgs = DDGS().text(polecenie, region='pl-pl', max_results=3)
+                if wyniki_ddgs:
+                    kontekst_web = "\n".join([f"- Tytuł: {r['title']} | Treść: {r['body']}" for r in wyniki_ddgs])
+            except: pass
 
-    zapisz_wiadomosc_db(USER_ID, "user", polecenie)
+    zapytanie_do_wyslania = polecenie
+    if kontekst_kb or kontekst_web:
+        zapytanie_do_wyslania = "KONTEKST SYSTEMOWY (Użyj tych danych do odpowiedzi):\n"
+        if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
+        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU (Omijają limit wiedzy) ---\n{kontekst_web}\n"
+        zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
+        
+        if kontekst_web: st.toast("Połączono z internetem na żywo!", icon="🌍")
+
+    zapisz_wiadomosc_db(USER_ID, "user", polecenie) # Zapisujemy czyste pytanie bez kontekstu do historii
     with st.chat_message("user"): st.markdown(polecenie)
         
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
         
-        instrukcja_sys = TRYBY[wybrany_tryb] + (
-            "\nUKRYTE KOMENDY MEDIALNE: Jeśli użytkownik prosi o grafikę lub zdjęcie, napisz na końcu wypowiedzi 'GENERATE_IMAGE: [prompt angielski, dodaj słowa: 8k, hyperrealistic, cinematic lighting, highly detailed, photorealistic]'. "
-            "Jeśli prosi o WIDEO, FILM lub ANIMACJĘ, napisz na końcu wypowiedzi 'GENERATE_VIDEO: [krótki prompt angielski]'. "
-            "Pliki: 'GENERATE_EXCEL: [csv]', 'GENERATE_PDF: [tekst]'."
-        )
-        api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
+        # Budowa Instrukcji Systemowej z włączonymi opcjami
+        instrukcja_sys = TRYBY[wybrany_tryb]
         
-        if st.session_state.img_memory:
-            api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
-        else:
-            api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
+        # Aplikowanie Opcji 2: Pamięci Epizodycznej
+        profil_usera = pobierz_profil(USER_ID)
+        if profil_usera:
+            instrukcja_sys += f"\n\nWAŻNE INFORMACJE O UŻYTKOWNIKU:\n{profil_usera}\nBezwzględnie stosuj się do tych zasad podczas całej rozmowy."
+            
+        # Aplikowanie Opcji 1: Agentic Workflow
+        if agentic_mode:
+            instrukcja_sys += (
+                "\n\nUWAGA (TRYB AGENTIC WORKFLOW): Jesteś w trybie zaawansowanej analizy logicznej. Zanim wygenerujesz ostateczną odpowiedź, "
+                "MUSISZ najpierw otworzyć tag <mysli>, przeprowadzić w nim dogłębną samokrytykę, zaplanować kroki odpowiedzi i wyłapać własne błędy. "
+                "Dopiero po zamknięciu tagu </mysli> możesz podać ostateczną, gotową odpowiedź do użytkownika."
+            )
+            
+        instrukcja_sys += "\nUKRYTE KOMENDY MEDIALNE: Jeśli zapytany, dodaj GENERATE_IMAGE: [prompt angielski], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]."
+        
+        api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
+        if st.session_state.img_memory: api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
+        else: api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile",
-                messages=api_messages,
-                stream=True
+                messages=api_messages, stream=True
             )
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
-                    placeholder.markdown(full_response.split("GENERATE_")[0] + "▌")
+                    # Wizualizacja na żywo z maskowaniem ukrytych komend i tagów myślowych
+                    widoczny_stream = full_response.split("GENERATE_")[0]
+                    if "<mysli>" in widoczny_stream and "</mysli>" not in widoczny_stream:
+                        placeholder.markdown("🧠 *Agent przetwarza dane i weryfikuje logikę...* ▌")
+                    elif "<mysli>" in widoczny_stream and "</mysli>" in widoczny_stream:
+                        placeholder.markdown(widoczny_stream.split("</mysli>")[1].strip() + " ▌")
+                    else:
+                        placeholder.markdown(widoczny_stream + " ▌")
             
-            widoczny = full_response.split("GENERATE_")[0].strip()
-            placeholder.markdown(widoczny)
+            # Finalne formatowanie po odebraniu całej wiadomości
+            widoczny_koniec = full_response.split("GENERATE_")[0].strip()
+            if "<mysli>" in widoczny_koniec and "</mysli>" in widoczny_koniec:
+                mysli_finalne = widoczny_koniec.split("<mysli>")[1].split("</mysli>")[0].strip()
+                odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip()
+                with st.expander("Zobacz proces myślowy Agenta", expanded=False):
+                    st.markdown(f"<div class='myśli-agenta'>{mysli_finalne}</div>", unsafe_allow_html=True)
+                placeholder.markdown(odpowiedz_finalna)
+            else:
+                placeholder.markdown(widoczny_koniec)
+                
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            if "GENERATE_IMAGE:" in full_response:
-                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true", caption="🖼️ Projekt Graficzny HD")
-            if "GENERATE_VIDEO:" in full_response:
-                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip())}?width=512&height=512&nologo=true&model=flux", caption="🎬 Koncepcja Klatki Filmowej")
+            # WYKONYWANIE KOMEND MEDIALNYCH (Grafiki, Wideo, Dokumenty)
+            if "GENERATE_IMAGE:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true", caption="🖼️ Render AI HD")
+            if "GENERATE_VIDEO:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip())}?width=512&height=512&nologo=true&model=flux", caption="🎬 Kadr Animacji")
             if "GENERATE_EXCEL:" in full_response:
-                df = pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";")
-                buffer = io.BytesIO(); df.to_excel(buffer, index=False, engine='openpyxl')
-                st.download_button("📊 Pobierz Arkusz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
+                buffer = io.BytesIO(); pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";").to_excel(buffer, index=False, engine='openpyxl')
+                st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
             if "GENERATE_PDF:" in full_response:
-                czysty_tekst = unicodedata.normalize('NFKD', full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()).encode('ascii', 'ignore').decode('utf-8')
-                pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=czysty_tekst)
-                st.download_button("📄 Pobierz Dokument PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
+                pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=unicodedata.normalize('NFKD', full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()).encode('ascii', 'ignore').decode('utf-8'))
+                st.download_button("📄 Pobierz PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
-        except Exception as e:
-            st.error(f"Problem operacyjny: {e}")
+        except Exception as e: st.error(f"Problem operacyjny: {e}")
