@@ -239,6 +239,21 @@ if USER_ROLA == "admin":
                     conn.close()
                     st.success("Konto skasowane z bazy!")
                     st.rerun()
+                    st.markdown("---")
+        # Opcja 3: Zmiana własnego hasła (Administratora)
+        st.markdown("**Twoje konto (Administrator):**")
+        moje_nowe_haslo = st.text_input("Nowe hasło dla Ciebie", type="password", key="admin_pass")
+        
+        if st.button("ZAKTUALIZUJ MOJE HASŁO"):
+            if moje_nowe_haslo:
+                h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db()
+                cur = conn.cursor()
+                cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, USER_LOGIN))
+                conn.commit()
+                cur.close()
+                conn.close()
+                st.success("Twoje hasło zostało zmienione! Zaloguj się nowym hasłem przy następnej wizycie.")
 
 # SEKCJA PLIKÓW I SYSTEMU
 st.title("⚡ Agent V11: Multi-User System")
