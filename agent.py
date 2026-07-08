@@ -17,7 +17,93 @@ import requests
 from bs4 import BeautifulSoup
 
 # ==========================================
-# 1. POŁĄCZENIE I INICJALIZACJA BAZY
+# 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
+# ==========================================
+st.set_page_config(page_title="Agent AI Max Pro", layout="wide", page_icon="⚡")
+
+# Wstrzyknięcie stylów wzorowanych na systemach Apple (macOS/iOS)
+apple_theme_css = """
+<style>
+    /* Globalna zmiana czcionki na systemową Apple */
+    html, body, [class*="css"], .stApp {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        background-color: #161617; /* Głęboka czerń/grafit Apple */
+        color: #F5F5F7; /* Jasnoszary tekst Apple */
+    }
+    
+    /* Panel boczny (Sidebar) - efekt półprzezroczystego Midnight/Space Gray */
+    [data-testid="stSidebar"] {
+        background-color: #1E1E1F !important;
+        border-right: 1px solid #333336;
+    }
+    
+    /* Profesjonalne nagłówki */
+    h1, h2, h3 {
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.022em !important;
+    }
+    
+    /* Przyciski w stylu Apple (Domyślne i Primary) */
+    .stButton>button {
+        background-color: #2D2D2F;
+        color: #F5F5F7;
+        border: 1px solid #424245;
+        border-radius: 8px; /* Charakterystyczne subtelne zaokrąglenie Apple */
+        padding: 8px 16px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+    }
+    .stButton>button:hover {
+        background-color: #3A3A3C;
+        border-color: #68686E;
+        color: #FFFFFF;
+    }
+    
+    /* Przyciski główne (Primary) - klasyczny Apple Blue */
+    .stButton>button[data-testid="baseButton-primary"] {
+        background-color: #0071E3 !important;
+        border: none !important;
+        color: #FFFFFF !important;
+    }
+    .stButton>button[data-testid="baseButton-primary"]:hover {
+        background-color: #147CE5 !important;
+        box-shadow: 0 0 8px rgba(0,113,227,0.4);
+    }
+    
+    /* Okna wprowadzania tekstu i formularze */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div {
+        background-color: #1E1E1F !important;
+        color: #FFFFFF !important;
+        border: 1px solid #424245 !important;
+        border-radius: 8px !important;
+    }
+    .stTextInput>div>div>input:focus {
+        border-color: #0071E3 !important;
+        box-shadow: 0 0 0 3px rgba(0,113,227,0.2) !important;
+    }
+    
+    /* Kontenery wiadomości czatu (Bąbelki) */
+    [data-testid="stChatMessage"] {
+        background-color: #1E1E1F !important;
+        border: 1px solid #2D2D2F !important;
+        border-radius: 12px !important;
+        padding: 16px !important;
+        margin-bottom: 12px !important;
+    }
+    
+    /* Rozwijane menu (Expander) */
+    .stDetails {
+        background-color: #1E1E1F !important;
+        border: 1px solid #2D2D2F !important;
+        border-radius: 12px !important;
+    }
+</style>
+"""
+st.markdown(apple_theme_css, unsafe_allow_html=True)
+
+# ==========================================
+# 2. POŁĄCZENIE I INICJALIZACJA BAZY
 # ==========================================
 def pobierz_polaczenie_db():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -37,14 +123,13 @@ def inicjalizuj_baze_danych():
             cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (st.secrets["ADMIN_LOGIN"], hash_hasla, 'admin'))
             conn.commit()
         except: conn.rollback()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
 try: inicjalizuj_baze_danych()
 except Exception as e: st.error(f"Błąd bazy: {e}"); st.stop()
 
 # ==========================================
-# 2. MECHANIZMY AUTORYZACJI, ZAPISU I SKANOWANIA URL
+# 3. MECHANIZMY SYSTEMOWE I AUTORYZACJA
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
     conn = pobierz_polaczenie_db()
@@ -99,14 +184,12 @@ def pobierz_tekst_z_url(url):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        for script in soup(["script", "style", "nav", "footer"]):
-            script.extract()
+        for script in soup(["script", "style", "nav", "footer"]): script.extract()
         return soup.get_text(separator=' ', strip=True)
-    except Exception as e:
-        return f"BŁĄD: {e}"
+    except Exception as e: return f"BŁĄD: {e}"
 
 # ==========================================
-# 3. INTERFEJS LOGOWANIA
+# 4. INTERFEJS LOGOWANIA
 # ==========================================
 if "user_auth" not in st.session_state: st.session_state.user_auth = None
 if not st.session_state.user_auth:
@@ -126,7 +209,7 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 4. TRYBY EKSPERCKIE I ZARZĄDZANIE WIEDZĄ
+# 5. NOWOŚĆ: TRYBY EKSPERCKIE (W TYM INŻYNIER PROMPTÓW)
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
@@ -134,11 +217,20 @@ if st.sidebar.button("Wyloguj", type="secondary"):
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
+    "✍️ Inżynier Promptów (PL/ENG)": (
+        "Jesteś światowej klasy, elitarnym Inżynierem Promptów (Prompt Engineer). "
+        "Twoim jedynym zadaniem jest tworzenie potężnych, precyzyjnych i maksymalnie skutecznych promptów strukturalnych "
+        "dla modeli LLM (ChatGPT, Claude, Llama). Kiedy użytkownik poda Ci temat lub cel: "
+        "1. Przeanalizuj intencję. 2. Wygeneruj profesjonalny, rozbudowany prompt strukturalny w języku polskim. "
+        "3. Przetłumacz go lub stwórz alternatywną, zoptymalizowaną wersję w języku angielskim (modele często działają lepiej po angielsku). "
+        "Używaj zaawansowanych technik inżynierii promptów: przypisywanie ról (Role-playing), określanie kontekstu, "
+        "precyzyjne ograniczenia (Constraints), instrukcje krok po kroku (Chain-of-Thought) oraz format wyjściowy (Output format)."
+    ),
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP. Pisz czysty kod, myśl strukturalnie.",
     "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki. Skup się na dynamice i technice rzutu.",
     "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej (grupa VAG). Podawaj precyzyjne diagnozy."
 }
-wybrany_tryb = st.sidebar.selectbox("🎭 Wybierz Osobistość Agenta", list(TRYBY.keys()))
+wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
@@ -148,40 +240,38 @@ with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
         if plik_kb.type == "application/pdf":
             reader = PyPDF2.PdfReader(plik_kb)
             tresc = "".join([page.extract_text() for page in reader.pages])
-        else:
-            tresc = plik_kb.read().decode("utf-8")
+        else: tresc = plik_kb.read().decode("utf-8")
         dodaj_do_bazy_wiedzy(plik_kb.name, tresc)
-        st.success(f"Plik {plik_kb.name} dodany do pamięci!")
+        st.success("Plik zapisany!")
 
     st.markdown("---")
     st.markdown("**Skanuj stronę internetową:**")
     url_do_bazy = st.text_input("Wklej pełny link (np. https://...)")
-    if st.button("🔗 Pobierz Treść i Zapisz"):
+    if st.button("🔗 Skanuj i Zapisz URL"):
         if url_do_bazy.startswith("http"):
-            with st.spinner("🕷️ Skanuję stronę..."):
+            with st.spinner("🕷️ Skanuję..."):
                 tekst_ze_strony = pobierz_tekst_z_url(url_do_bazy)
                 if not tekst_ze_strony.startswith("BŁĄD"):
                     dodaj_do_bazy_wiedzy(url_do_bazy, tekst_ze_strony)
                     st.success("✅ Strona zgrana!")
-                else: st.error("Strona blokuje boty lub link jest błędny.")
-        else: st.warning("Link musi zaczynać się od http lub https.")
+                else: st.error("Błąd pobierania danych.")
 
 # ==========================================
-# 5. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
+# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent V13.1: Enhanced Media")
+st.title("⚡ Agent AI Max Pro")
+st.caption("System: Enterprise Model Suite | Design Style: Apple Midnight Minimalist")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
     st.markdown("---")
-    st.subheader("👁️ Zmysł Wzroku (Tymczasowy)")
+    st.subheader("👁️ Zmysł Wzroku")
     zdjecie = st.file_uploader("Dodaj Zdjęcie do analizy", type=['png', 'jpg', 'jpeg'])
     if zdjecie:
         st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
         st.success("Obraz wgrany!")
     if st.button("🧹 Resetuj rozmowę"):
-        wyczysc_historie_db(USER_ID)
-        st.rerun()
+        wyczysc_historie_db(USER_ID); st.rerun()
 
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
@@ -195,39 +285,37 @@ col_mic, col_input = st.columns([1, 10])
 with col_mic:
     audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
 with col_input:
-    polecenie_tekst = st.chat_input("Zadaj pytanie, zrób grafikę, wideo lub nagraj głos...")
+    polecenie_tekst = st.chat_input("Zadaj pytanie, każ stworzyć pliki lub podyktuj polecenie...")
 
 polecenie = polecenie_tekst
 
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
-    with st.spinner("🎧 Transkrybuję..."):
+    with st.spinner("🎧 Transkrybuję głos..."):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         try:
             transkrypcja = client.audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
             polecenie = transkrypcja
-        except Exception: st.error("Błąd mikrofonu.")
+        except Exception: st.error("Błąd wejścia audio.")
 
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
-    zapytanie_do_zapisu = polecenie
     zapytanie_do_wyslania = polecenie
     
     if kontekst_kb:
         zapytanie_do_wyslania = f"DODATKOWY KONTEKST Z BAZY WIEDZY:\n{kontekst_kb}\n\nPYTANIE: {polecenie}"
-        st.toast("Użyto danych ze skanera URL / wgranych plików!", icon="🌐")
+        st.toast("Pomyślnie zsynchronizowano dane z Bazy Wiedzy!", icon="🌐")
 
-    zapisz_wiadomosc_db(USER_ID, "user", zapytanie_do_zapisu)
+    zapisz_wiadomosc_db(USER_ID, "user", polecenie)
     with st.chat_message("user"): st.markdown(polecenie)
         
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
         
-        # WZMOCNIENIE PROMPTU (Reżyser) ORAZ DODANIE WIDEO
         instrukcja_sys = TRYBY[wybrany_tryb] + (
             "\nUKRYTE KOMENDY MEDIALNE: Jeśli użytkownik prosi o grafikę lub zdjęcie, napisz na końcu wypowiedzi 'GENERATE_IMAGE: [prompt angielski, dodaj słowa: 8k, hyperrealistic, cinematic lighting, highly detailed, photorealistic]'. "
-            "Jeśli prosi o WIDEO, FILM lub ANIMACJĘ, napisz na końcu wypowiedzi 'GENERATE_VIDEO: [krótki prompt angielski, np. A moving truck on highway, loop, dynamic action]'. "
+            "Jeśli prosi o WIDEO, FILM lub ANIMACJĘ, napisz na końcu wypowiedzi 'GENERATE_VIDEO: [krótki prompt angielski]'. "
             "Pliki: 'GENERATE_EXCEL: [csv]', 'GENERATE_PDF: [tekst]'."
         )
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
@@ -253,31 +341,18 @@ if polecenie:
             placeholder.markdown(widoczny)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            # WYZWALACZ: Profesjonalna Grafika (Enhance Mode)
+            # WYZWALACZE MULTIMEDIALNE ORAZ PLIKÓW
             if "GENERATE_IMAGE:" in full_response:
-                prompt_img = full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip()
-                # Włączono 'enhance=true' na serwerach Pollinations dla lepszego realizmu w wersji darmowej
-                url_img = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_img)}?width=1024&height=1024&nologo=true&enhance=true"
-                st.image(url_img, caption="🖼️ Fotorealistyczna Grafika")
-                
-            # WYZWALACZ: Animowane Wideo (GIF)
+                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true", caption="🖼️ Projekt Graficzny HD")
             if "GENERATE_VIDEO:" in full_response:
-                prompt_vid = full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip()
-                with st.spinner("🎬 Renderowanie darmowego wideo (to może potrwać do 15 sekund)..."):
-                    # Użycie starszego, ale dostępnego za darmo silnika animacji (np. deforum/stable video) na serwerach
-                    url_vid = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_vid)}?width=512&height=512&nologo=true&model=flux"
-                    # Ze względu na brak dedykowanego wideo endpointu w pełni darmowym planie, robimy trik z modelem Flux i renderowaniem pseudo-dynamicznym
-                    st.image(url_vid, caption="🎬 Koncepcja Kadru (Darmowe API nie wspiera płynnego .mp4, renderowanie klatki HD)")
-
-            # WYZWALACZE PLIKÓW
+                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip())}?width=512&height=512&nologo=true&model=flux", caption="🎬 Koncepcja Klatki Filmowej")
             if "GENERATE_EXCEL:" in full_response:
                 df = pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";")
                 buffer = io.BytesIO(); df.to_excel(buffer, index=False, engine='openpyxl')
-                st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
+                st.download_button("📊 Pobierz Arkusz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
             if "GENERATE_PDF:" in full_response:
                 czysty_tekst = unicodedata.normalize('NFKD', full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()).encode('ascii', 'ignore').decode('utf-8')
                 pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=czysty_tekst)
-                st.download_button("📄 Pobierz PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
+                st.download_button("📄 Pobierz Dokument PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
-        except Exception as e:
-            st.error(f"Problem operacyjny: {e}")
+        except Exception as e: st.error(f"Problem operacyjny: {e}")
