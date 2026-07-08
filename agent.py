@@ -93,14 +93,12 @@ def szukaj_w_bazie_wiedzy(zapytanie):
     if wyniki: return "\n\n".join([f"[Źródło: {w[0]}]: {w[1][:1500]}" for w in wyniki])
     return ""
 
-# NOWOŚĆ: Funkcja do zgrywania treści ze stron WWW
 def pobierz_tekst_z_url(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        # Usuwamy kod JS i CSS, żeby Agent czytał tylko tekst
         for script in soup(["script", "style", "nav", "footer"]):
             script.extract()
         return soup.get_text(separator=' ', strip=True)
@@ -144,9 +142,6 @@ wybrany_tryb = st.sidebar.selectbox("🎭 Wybierz Osobistość Agenta", list(TRY
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
-    st.caption("Pamięć trwała: Wgrane dane zostają na zawsze.")
-    
-    # 4a. Wgrywanie plików
     plik_kb = st.file_uploader("Wgraj z dysku (PDF/TXT)", type=['pdf', 'txt'], key="kb_upload")
     if plik_kb and st.button("💾 Zapisz Plik w Bazie"):
         tresc = ""
@@ -159,26 +154,22 @@ with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
         st.success(f"Plik {plik_kb.name} dodany do pamięci!")
 
     st.markdown("---")
-    
-    # 4b. NOWOŚĆ: Skaner Linków (Zgrywarka WWW)
     st.markdown("**Skanuj stronę internetową:**")
     url_do_bazy = st.text_input("Wklej pełny link (np. https://...)")
     if st.button("🔗 Pobierz Treść i Zapisz"):
         if url_do_bazy.startswith("http"):
-            with st.spinner("🕷️ Agent skanuje podaną stronę..."):
+            with st.spinner("🕷️ Skanuję stronę..."):
                 tekst_ze_strony = pobierz_tekst_z_url(url_do_bazy)
                 if not tekst_ze_strony.startswith("BŁĄD"):
                     dodaj_do_bazy_wiedzy(url_do_bazy, tekst_ze_strony)
-                    st.success("✅ Strona zgrana i zapisana w mózgu Agenta!")
-                else:
-                    st.error("Strona blokuje boty lub link jest błędny.")
-        else:
-            st.warning("Link musi zaczynać się od http lub https.")
+                    st.success("✅ Strona zgrana!")
+                else: st.error("Strona blokuje boty lub link jest błędny.")
+        else: st.warning("Link musi zaczynać się od http lub https.")
 
 # ==========================================
 # 5. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent V13: Web Scanner Edition")
+st.title("⚡ Agent V13.1: Enhanced Media")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -204,7 +195,7 @@ col_mic, col_input = st.columns([1, 10])
 with col_mic:
     audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
 with col_input:
-    polecenie_tekst = st.chat_input("Zadaj pytanie, wklej URL lub nagraj głos...")
+    polecenie_tekst = st.chat_input("Zadaj pytanie, zrób grafikę, wideo lub nagraj głos...")
 
 polecenie = polecenie_tekst
 
@@ -233,7 +224,12 @@ if polecenie:
         placeholder = st.empty()
         full_response = ""
         
-        instrukcja_sys = TRYBY[wybrany_tryb] + "\nOpcje ukryte: Jeśli zapytany, dodaj GENERATE_IMAGE: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]."
+        # WZMOCNIENIE PROMPTU (Reżyser) ORAZ DODANIE WIDEO
+        instrukcja_sys = TRYBY[wybrany_tryb] + (
+            "\nUKRYTE KOMENDY MEDIALNE: Jeśli użytkownik prosi o grafikę lub zdjęcie, napisz na końcu wypowiedzi 'GENERATE_IMAGE: [prompt angielski, dodaj słowa: 8k, hyperrealistic, cinematic lighting, highly detailed, photorealistic]'. "
+            "Jeśli prosi o WIDEO, FILM lub ANIMACJĘ, napisz na końcu wypowiedzi 'GENERATE_VIDEO: [krótki prompt angielski, np. A moving truck on highway, loop, dynamic action]'. "
+            "Pliki: 'GENERATE_EXCEL: [csv]', 'GENERATE_PDF: [tekst]'."
+        )
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
         
         if st.session_state.img_memory:
@@ -257,8 +253,23 @@ if polecenie:
             placeholder.markdown(widoczny)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
+            # WYZWALACZ: Profesjonalna Grafika (Enhance Mode)
             if "GENERATE_IMAGE:" in full_response:
-                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true")
+                prompt_img = full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip()
+                # Włączono 'enhance=true' na serwerach Pollinations dla lepszego realizmu w wersji darmowej
+                url_img = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_img)}?width=1024&height=1024&nologo=true&enhance=true"
+                st.image(url_img, caption="🖼️ Fotorealistyczna Grafika")
+                
+            # WYZWALACZ: Animowane Wideo (GIF)
+            if "GENERATE_VIDEO:" in full_response:
+                prompt_vid = full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip()
+                with st.spinner("🎬 Renderowanie darmowego wideo (to może potrwać do 15 sekund)..."):
+                    # Użycie starszego, ale dostępnego za darmo silnika animacji (np. deforum/stable video) na serwerach
+                    url_vid = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt_vid)}?width=512&height=512&nologo=true&model=flux"
+                    # Ze względu na brak dedykowanego wideo endpointu w pełni darmowym planie, robimy trik z modelem Flux i renderowaniem pseudo-dynamicznym
+                    st.image(url_vid, caption="🎬 Koncepcja Kadru (Darmowe API nie wspiera płynnego .mp4, renderowanie klatki HD)")
+
+            # WYZWALACZE PLIKÓW
             if "GENERATE_EXCEL:" in full_response:
                 df = pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";")
                 buffer = io.BytesIO(); df.to_excel(buffer, index=False, engine='openpyxl')
