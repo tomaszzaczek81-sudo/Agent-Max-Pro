@@ -15,6 +15,10 @@ from groq import Groq
 from audio_recorder_streamlit import audio_recorder
 import requests
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
+from gtts import gTTS
+import sys
+from contextlib import redirect_stdout
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -42,8 +46,7 @@ st.markdown(apple_theme_css, unsafe_allow_html=True)
 # ==========================================
 # 2. POŁĄCZENIE I INICJALIZACJA BAZY
 # ==========================================
-def pobierz_polaczenie_db():
-    return psycopg2.connect(st.secrets["DATABASE_URL"])
+def pobierz_polaczenie_db(): return psycopg2.connect(st.secrets["DATABASE_URL"])
 
 def inicjalizuj_baze_danych():
     conn = pobierz_polaczenie_db(); cur = conn.cursor()
@@ -105,16 +108,7 @@ def szukaj_w_bazie_wiedzy(zapytanie):
 
 def wyczysc_baze_wiedzy():
     conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM baza_wiedzy")
-    conn.commit(); cur.close(); conn.close()
-
-def pobierz_tekst_z_url(url):
-    try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for script in soup(["script", "style", "nav", "footer"]): script.extract()
-        return soup.get_text(separator=' ', strip=True)
-    except Exception as e: return f"BŁĄD: {e}"
+    cur.execute("DELETE FROM baza_wiedzy"); conn.commit(); cur.close(); conn.close()
 
 def pobierz_profil(user_id):
     conn = pobierz_polaczenie_db(); cur = conn.cursor()
@@ -138,8 +132,7 @@ if not st.session_state.user_auth:
     haslo = st.text_input("Hasło", type="password")
     if st.button("ZALOGUJ SIĘ", type="primary"):
         uzytkownik = weryfikuj_uzytkownika(login, haslo)
-        if uzytkownik:
-            st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
+        if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
         else: st.error("Błąd logowania!")
     st.stop()
 
@@ -148,27 +141,31 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. PANEL BOCZNY
+# 5. PANEL BOCZNY (NOWE TRYBY V16)
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
-agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Samoweryfikacja)", value=False)
+agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=False)
+tts_mode = st.sidebar.toggle("🔊 Lektor (Odpowiedzi Głosowe)", value=False)
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn. Używaj emoji, hashtagów i formatowania pod social media.",
-    "✍️ Inżynier Promptów": "Jesteś światowej klasy Inżynierem Promptów. Twórz precyzyjne struktury promptów (PL/ENG).",
+    "🌐 Konsylium (Swarm Mode)": (
+        "Jesteś zarządcą roju ekspertów (Swarm). Każda Twoja odpowiedź MUSI być symulacją dyskusji trzech osób. "
+        "Najpierw wypowiada się [Architekt] tworząc plan/kod, potem [Ekspert LinkedIn] tłumaczy to na język korzyści, "
+        "a na końcu [Kierownik] podsumowuje ostateczną decyzję dla użytkownika."
+    ),
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP.",
-    "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki.",
-    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej (grupa VAG)."
+    "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn.",
+    "✍️ Inżynier Promptów": "Jesteś światowej klasy Inżynierem Promptów.",
+    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej."
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("👤 Mój Profil (Pamięć Epizodyczna)", expanded=False):
-    aktualny_profil = pobierz_profil(USER_ID)
-    nowy_profil = st.text_area("Twój unikalny profil:", value=aktualny_profil, height=150)
+with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
+    nowy_profil = st.text_area("Twój profil:", value=pobierz_profil(USER_ID), height=150)
     if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Profil zaktualizowany!")
 
 with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
@@ -176,36 +173,13 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
     if plik_kb and st.button("💾 Zapisz Plik"):
         tresc = "".join([page.extract_text() for page in PyPDF2.PdfReader(plik_kb).pages]) if plik_kb.type == "application/pdf" else plik_kb.read().decode("utf-8")
         dodaj_do_bazy_wiedzy(plik_kb.name, tresc); st.success("Plik zapisany!")
-    
-    st.markdown("---")
-    url_do_zadania = st.text_input("Link do śledzenia (https://...)")
-    if st.button("Dodaj do kolejki zadań"):
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        cur.execute("INSERT INTO zadania_cykliczne (uzytkownik_id, url) VALUES (%s, %s)", (USER_ID, url_do_zadania))
-        conn.commit(); cur.close(); conn.close(); st.success("Dodano do kolejki!")
-    
-    if st.button("▶️ Uruchom zadania z kolejki"):
-        with st.spinner("Agent skanuje zaplanowane strony w tle..."):
-            conn = pobierz_polaczenie_db(); cur = conn.cursor()
-            cur.execute("SELECT id, url FROM zadania_cykliczne WHERE uzytkownik_id = %s", (USER_ID,))
-            zadania = cur.fetchall()
-            for z in zadania:
-                tekst = pobierz_tekst_z_url(z[1])
-                if not tekst.startswith("BŁĄD"): dodaj_do_bazy_wiedzy(z[1], tekst)
-                cur.execute("DELETE FROM zadania_cykliczne WHERE id = %s", (z[0],))
-            conn.commit(); cur.close(); conn.close(); st.success("Zadania z kolejki wykonane!")
-            
-    st.markdown("---")
-    if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"):
-        wyczysc_baze_wiedzy()
-        st.success("Baza wiedzy zresetowana! Duchy przeszłości usunięte.")
-        st.rerun()
+    if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"): wyczysc_baze_wiedzy(); st.success("Baza wyczyszczona!"); st.rerun()
 
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V15.2")
-st.caption("System: Ultimate Autonomous Edition | Apple Design | Stealth Web Search")
+st.title("⚡ Agent AI Max Pro V16")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | TTS")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -221,15 +195,12 @@ for msg in historia_czatu:
         text = str(msg["content"])
         if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
         if "<mysli>" in text and "</mysli>" in text:
-            mysli = text.split("<mysli>")[1].split("</mysli>")[0].strip()
-            odpowiedz = text.split("</mysli>")[1].strip()
-            with st.expander("Zobacz proces myślowy Agenta", expanded=False): st.markdown(f"<div class='myśli-agenta'>{mysli}</div>", unsafe_allow_html=True)
-            st.markdown(odpowiedz)
+            st.markdown(text.split("</mysli>")[1].strip())
         else: st.markdown(text)
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Zadaj pytanie (użyj słowa 'dzisiaj', aby przeszukać internet)...")
+with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub użyj słowa 'dzisiaj'...")
 
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
@@ -240,19 +211,15 @@ if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
-    
-    # NIEZAWODNA WYSZUKIWARKA V11 (Omija blokady serwerowe Cloudflare)
-    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "aktualności"]
+    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
         with st.spinner("🌍 Przeszukuję sieć (Stealth Mode)..."):
             try:
                 url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(polecenie)}"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as res:
-                    html = res.read().decode('utf-8')
-                    snippets = re.findall(r'class="result__snippet[^>]*>(.*?)</a>', html, re.IGNORECASE | re.DOTALL)
-                    if snippets:
-                        kontekst_web = "\n".join([f"- {re.sub(r'<[^>]+>', '', snip).strip()}" for snip in snippets[:4]])
+                    snippets = re.findall(r'class="result__snippet[^>]*>(.*?)</a>', res.read().decode('utf-8'), re.IGNORECASE | re.DOTALL)
+                    if snippets: kontekst_web = "\n".join([f"- {re.sub(r'<[^>]+>', '', snip).strip()}" for snip in snippets[:4]])
             except: pass
 
     zapytanie_do_wyslania = polecenie
@@ -261,7 +228,6 @@ if polecenie:
         if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
         if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU ---\n{kontekst_web}\n"
         zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
-        if kontekst_web: st.toast("Sukces! Pomyślnie zgrano dane z internetu.", icon="🌍")
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
     with st.chat_message("user"): st.markdown(polecenie)
@@ -273,22 +239,17 @@ if polecenie:
         instrukcja_sys = TRYBY[wybrany_tryb]
         profil_usera = pobierz_profil(USER_ID)
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
-            
-        if agentic_mode:
-            instrukcja_sys += (
-                "\n\nUWAGA (TRYB AGENTIC WORKFLOW): Zanim podasz odpowiedź, "
-                "MUSISZ otworzyć tag <mysli>, przeprowadzić samokrytykę, zaplanować kroki i wyłapać błędy. "
-                "Dopiero po zamknięciu tagu </mysli> podaj odpowiedź."
-            )
-            
+        if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
+        
+        # Opcje Generatywne i Interpreter Kodu
         instrukcja_sys += (
-            "\n\nZASADA ABSOLUTNA: Surowo zabraniam Ci używania fraz typu 'nie mam dostępu do internetu', "
-            "'moja wiedza kończy się w 2023 r.' itp. Jeśli dostarczono Ci KONTEKST SYSTEMOWY z internetu, "
-            "masz go traktować jako w 100% pewny i na nim oprzeć swoją odpowiedź."
-            "\nUKRYTE KOMENDY MEDIALNE: Jeśli zapytany, dodaj GENERATE_IMAGE: [prompt], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]."
+            "\nUKRYTE KOMENDY: GENERATE_IMAGE: [prompt], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]. "
+            "JEŚLI musisz wykonać matematykę lub logikę, napisz na końcu 'GENERATE_CODE: [Twój czysty kod Python z użyciem print()]'. System uruchomi go za Ciebie."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
+        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu. Ignoruj starą historię jeśli nie pasuje."})
+        
         if st.session_state.img_memory: api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
         else: api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
@@ -302,27 +263,44 @@ if polecenie:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
                     widoczny_stream = full_response.split("GENERATE_")[0]
-                    if "<mysli>" in widoczny_stream and "</mysli>" not in widoczny_stream: placeholder.markdown("🧠 *Agent przetwarza dane i weryfikuje logikę...* ▌")
+                    if "<mysli>" in widoczny_stream and "</mysli>" not in widoczny_stream: placeholder.markdown("🧠 *Agent przetwarza...* ▌")
                     elif "<mysli>" in widoczny_stream and "</mysli>" in widoczny_stream: placeholder.markdown(widoczny_stream.split("</mysli>")[1].strip() + " ▌")
                     else: placeholder.markdown(widoczny_stream + " ▌")
             
             widoczny_koniec = full_response.split("GENERATE_")[0].strip()
-            if "<mysli>" in widoczny_koniec and "</mysli>" in widoczny_koniec:
-                mysli_finalne = widoczny_koniec.split("<mysli>")[1].split("</mysli>")[0].strip()
-                odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip()
-                with st.expander("Zobacz proces myślowy Agenta", expanded=False): st.markdown(f"<div class='myśli-agenta'>{mysli_finalne}</div>", unsafe_allow_html=True)
-                placeholder.markdown(odpowiedz_finalna)
-            else: placeholder.markdown(widoczny_koniec)
-                
+            odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
+            placeholder.markdown(odpowiedz_finalna)
+            
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            if "GENERATE_IMAGE:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true", caption="🖼 Carver AI HD")
-            if "GENERATE_VIDEO:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_VIDEO:')[1].split('GENERATE_')[0].strip())}?width=512&height=512&nologo=true&model=flux", caption="🎬 Film Frame")
+            # NOWOŚĆ 1: LEKTOR GŁOSOWY (TTS)
+            if tts_mode and odpowiedz_finalna:
+                with st.spinner("🎙️ Generowanie głosu..."):
+                    try:
+                        tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
+                        tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
+                        st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
+                    except Exception as e: st.warning("Błąd generowania głosu.")
+            
+            # NOWOŚĆ 2: CODE INTERPRETER (Piaskownica)
+            if "GENERATE_CODE:" in full_response:
+                kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
+                kod = re.sub(r'```python|```', '', kod).strip()
+                st.markdown("**💻 Interpreter Pythona - Uruchomiony kod:**")
+                st.code(kod, language="python")
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    try:
+                        exec(kod)
+                        wynik_kodu = f.getvalue()
+                        if wynik_kodu: st.info(f"**Wynik z serwera:**\n{wynik_kodu}")
+                        else: st.info("**Wynik z serwera:** Kod wykonany pomyślnie (brak print).")
+                    except Exception as e:
+                        st.error(f"**Błąd wykonania:** {e}")
+
+            if "GENERATE_IMAGE:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true")
             if "GENERATE_EXCEL:" in full_response:
                 buffer = io.BytesIO(); pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";").to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
-            if "GENERATE_PDF:" in full_response:
-                pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=unicodedata.normalize('NFKD', full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()).encode('ascii', 'ignore').decode('utf-8'))
-                st.download_button("📄 Pobierz PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
         except Exception as e: st.error(f"Problem operacyjny: {e}")
