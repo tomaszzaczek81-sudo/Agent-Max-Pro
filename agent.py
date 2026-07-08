@@ -19,6 +19,7 @@ from duckduckgo_search import DDGS
 from gtts import gTTS
 import sys
 from contextlib import redirect_stdout
+import datetime
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -141,21 +142,52 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. PANEL BOCZNY (NOWE TRYBY V16)
+# 5. PANEL BOCZNY (Z PRZYWRÓCONYM ADMINEM)
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
+# PRZYWRÓCONY PANEL ADMINISTRATORA
+if USER_ROLA == "admin":
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
+        nowy_user = st.text_input("Nowy login", key="n_user")
+        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
+        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
+        if st.button("UTWÓRZ KONTO"):
+            if nowy_user and nowe_haslo:
+                h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                try:
+                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
+                    conn.commit(); st.success("Konto stworzone!")
+                except: st.error("Taki użytkownik już istnieje.")
+                cur.close(); conn.close()
+        st.markdown("---")
+        conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+        lista_uzytkownikow = cur.fetchall()
+        cur.close(); conn.close()
+        if lista_uzytkownikow:
+            wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
+            zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
+            if st.button("ZMIEŃ HASŁO"):
+                h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
+            if st.button("❌ USUŃ KONTO", type="primary"):
+                conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
+                conn.commit(); cur.close(); conn.close(); st.rerun()
+
+st.sidebar.markdown("---")
 agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=False)
 tts_mode = st.sidebar.toggle("🔊 Lektor (Odpowiedzi Głosowe)", value=False)
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "🌐 Konsylium (Swarm Mode)": (
-        "Jesteś zarządcą roju ekspertów (Swarm). Każda Twoja odpowiedź MUSI być symulacją dyskusji trzech osób. "
-        "Najpierw wypowiada się [Architekt] tworząc plan/kod, potem [Ekspert LinkedIn] tłumaczy to na język korzyści, "
-        "a na końcu [Kierownik] podsumowuje ostateczną decyzję dla użytkownika."
-    ),
+    "🌐 Konsylium (Swarm Mode)": "Jesteś zarządcą roju ekspertów (Swarm). Twoja odpowiedź MUSI być symulacją dyskusji trzech osób: [Architekt], [Ekspert LinkedIn] i [Kierownik].",
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP.",
     "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn.",
     "✍️ Inżynier Promptów": "Jesteś światowej klasy Inżynierem Promptów.",
@@ -178,8 +210,8 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | TTS")
+st.title("⚡ Agent AI Max Pro V16.1")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | TTS | Live Search")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -200,7 +232,7 @@ for msg in historia_czatu:
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub użyj słowa 'dzisiaj'...")
+with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub zapytaj o dzisiejsze wiadomości...")
 
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
@@ -236,19 +268,22 @@ if polecenie:
         placeholder = st.empty()
         full_response = ""
         
+        aktualny_czas = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        
         instrukcja_sys = TRYBY[wybrany_tryb]
+        instrukcja_sys += f"\n\nWAŻNE INFORMACJE O CZASIE RZECZYWISTYM: Dzisiejsza data to {aktualny_czas}. Obecny rok to bezwzględnie 2026. Absolutnie nie twierdz, że masz wiedzę tylko do 2023 r."
+        
         profil_usera = pobierz_profil(USER_ID)
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
         if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
         
-        # Opcje Generatywne i Interpreter Kodu
         instrukcja_sys += (
             "\nUKRYTE KOMENDY: GENERATE_IMAGE: [prompt], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]. "
-            "JEŚLI musisz wykonać matematykę lub logikę, napisz na końcu 'GENERATE_CODE: [Twój czysty kod Python z użyciem print()]'. System uruchomi go za Ciebie."
+            "JEŚLI musisz wykonać matematykę lub logikę, napisz na końcu 'GENERATE_CODE: [Twój kod Python]'. System uruchomi go za Ciebie."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
-        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu. Ignoruj starą historię jeśli nie pasuje."})
+        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu. Zignoruj starą historię, jeśli nie pasuje."})
         
         if st.session_state.img_memory: api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
         else: api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
@@ -273,7 +308,6 @@ if polecenie:
             
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            # NOWOŚĆ 1: LEKTOR GŁOSOWY (TTS)
             if tts_mode and odpowiedz_finalna:
                 with st.spinner("🎙️ Generowanie głosu..."):
                     try:
@@ -282,7 +316,6 @@ if polecenie:
                         st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
                     except Exception as e: st.warning("Błąd generowania głosu.")
             
-            # NOWOŚĆ 2: CODE INTERPRETER (Piaskownica)
             if "GENERATE_CODE:" in full_response:
                 kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
                 kod = re.sub(r'```python|```', '', kod).strip()
