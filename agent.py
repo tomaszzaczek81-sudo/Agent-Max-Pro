@@ -397,7 +397,7 @@ if polecenie:
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
-                model="llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile",
+                model="llama-3.2-90b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile",
                 messages=api_messages,
                 stream=True
             )
