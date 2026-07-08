@@ -12,9 +12,10 @@ import psycopg2
 from psycopg2.extras import DictCursor
 from fpdf import FPDF
 from groq import Groq
+from audio_recorder_streamlit import audio_recorder
 
 # ==========================================
-# 1. POŁĄCZENIE I INICJALIZACJA BAZY (NEON)
+# 1. POŁĄCZENIE I INICJALIZACJA BAZY
 # ==========================================
 def pobierz_polaczenie_db():
     return psycopg2.connect(st.secrets["DATABASE_URL"])
@@ -22,62 +23,32 @@ def pobierz_polaczenie_db():
 def inicjalizuj_baze_danych():
     conn = pobierz_polaczenie_db()
     cur = conn.cursor()
-    
-    # Tabela użytkowników
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS uzytkownicy (
-            id SERIAL PRIMARY KEY,
-            login TEXT UNIQUE NOT NULL,
-            haslo_hash TEXT NOT NULL,
-            rola TEXT NOT NULL
-        )
-    ''')
-    
-    # Tabela historii czatów przypisana do użytkownika
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS historia_czatow (
-            id SERIAL PRIMARY KEY,
-            uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE,
-            rola TEXT NOT NULL,
-            tresc TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    # NOWOŚĆ: Tabela trwałej Bazy Wiedzy
+    cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
     conn.commit()
     
-    # Tworzenie domyślnego admina z Secrets, jeśli baza jest pusta
     cur.execute("SELECT COUNT(*) FROM uzytkownicy WHERE rola = 'admin'")
     if cur.fetchone()[0] == 0:
-        login_admina = st.secrets["ADMIN_LOGIN"]
-        haslo_admina = st.secrets["ADMIN_PASSWORD"]
-        hash_hasla = hashlib.sha256(haslo_admina.encode()).hexdigest()
+        hash_hasla = hashlib.sha256(st.secrets["ADMIN_PASSWORD"].encode()).hexdigest()
         try:
-            cur.execute(
-                "INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)",
-                (login_admina, hash_hasla, 'admin')
-            )
+            cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (st.secrets["ADMIN_LOGIN"], hash_hasla, 'admin'))
             conn.commit()
-        except psycopg2.errors.UniqueViolation:
-            conn.rollback()
-            
+        except: conn.rollback()
     cur.close()
     conn.close()
 
-# Uruchomienie struktury bazy danych
-try:
-    inicjalizuj_baze_danych()
-except Exception as e:
-    st.error(f"Błąd krytyczny połączenia z bazą Neon: {e}")
-    st.stop()
+try: inicjalizuj_baze_danych()
+except Exception as e: st.error(f"Błąd bazy: {e}"); st.stop()
 
 # ==========================================
 # 2. MECHANIZMY AUTORYZACJI I ZAPISU
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
-    hash_hasla = hashlib.sha256(haslo.encode()).hexdigest()
     conn = pobierz_polaczenie_db()
     cur = conn.cursor(cursor_factory=DictCursor)
-    cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hash_hasla))
+    cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
     user = cur.fetchone()
     cur.close()
     conn.close()
@@ -87,281 +58,165 @@ def zapisz_wiadomosc_db(user_id, rola, tresc):
     conn = pobierz_polaczenie_db()
     cur = conn.cursor()
     cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
-    conn.commit()
-    cur.close()
-    conn.close()
+    conn.commit(); cur.close(); conn.close()
 
 def pobierz_historie_db(user_id):
     conn = pobierz_polaczenie_db()
     cur = conn.cursor(cursor_factory=DictCursor)
     cur.execute("SELECT rola, tresc FROM historia_czatow WHERE uzytkownik_id = %s ORDER BY timestamp ASC", (user_id,))
     rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
     return [{"role": r["rola"], "content": r["tresc"]} for r in rows]
 
 def wyczysc_historie_db(user_id):
     conn = pobierz_polaczenie_db()
     cur = conn.cursor()
     cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    conn.commit(); cur.close(); conn.close()
+
+# NOWOŚĆ: Funkcje Bazy Wiedzy
+def dodaj_do_bazy_wiedzy(nazwa, tresc):
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO baza_wiedzy (nazwa, tresc) VALUES (%s, %s)", (nazwa, tresc))
+    conn.commit(); cur.close(); conn.close()
+
+def szukaj_w_bazie_wiedzy(zapytanie):
+    slowa = [w for w in re.findall(r'\b\w{5,}\b', zapytanie.lower())]
+    if not slowa: return ""
+    conn = pobierz_polaczenie_db()
+    cur = conn.cursor()
+    query_parts = " OR ".join(["tresc ILIKE %s"] * len(slowa))
+    params = [f"%{s}%" for s in slowa]
+    cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
+    wyniki = cur.fetchall()
+    cur.close(); conn.close()
+    if wyniki:
+        return "\n\n".join([f"[Z pliku: {w[0]}]: {w[1][:1500]}" for w in wyniki])
+    return ""
 
 # ==========================================
 # 3. INTERFEJS LOGOWANIA
 # ==========================================
-if "user_auth" not in st.session_state:
-    st.session_state.user_auth = None
-
+if "user_auth" not in st.session_state: st.session_state.user_auth = None
 if not st.session_state.user_auth:
     st.title("🔒 Wielodostępny System AI")
-    st.markdown("Wprowadź swoje indywidualne dane dostępowe.")
-    
-    input_login = st.text_input("Login")
-    input_haslo = st.text_input("Hasło", type="password")
-    
+    login = st.text_input("Login")
+    haslo = st.text_input("Hasło", type="password")
     if st.button("ZALOGUJ SIĘ", type="primary"):
-        uzytkownik = weryfikuj_uzytkownika(input_login, input_haslo)
+        uzytkownik = weryfikuj_uzytkownika(login, haslo)
         if uzytkownik:
-            st.session_state.user_auth = {
-                "id": uzytkownik["id"],
-                "login": uzytkownik["login"],
-                "rola": uzytkownik["rola"]
-            }
+            st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}
             st.rerun()
-        else:
-            st.error("Nieprawidłowy login lub hasło!")
+        else: st.error("Błąd logowania!")
     st.stop()
 
-# Skróty zalogowanego profilu
 USER_ID = st.session_state.user_auth["id"]
 USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 4. POMOCNICZY MIKROSILNIK SIECIOWY
+# 4. NOWOŚĆ: TRYBY EKSPERCKIE I ZARZĄDZANIE WIEDZĄ
 # ==========================================
-def bezpieczne_wyszukiwanie(zapytanie):
-    wynik = ""
-    if "pogod" in zapytanie.lower():
-        try:
-            miasta = re.findall(r'\b[A-Z][a-ząćęłńóśźż]+\b', zapytanie)
-            miasto = miasta[0] if miasta else zapytanie.split()[-1]
-            url = f"https://wttr.in/{urllib.parse.quote(miasto)}?format=3"
-            req = urllib.request.Request(url, headers={'User-Agent': 'curl'})
-            with urllib.request.urlopen(req, timeout=3) as res:
-                wynik += f"POGODA NA ŻYWO: {res.read().decode('utf-8')}\n\n"
-        except: pass
-            
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(zapytanie)}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=4) as res:
-            html = res.read().decode('utf-8')
-            snippets = re.findall(r'class="result__snippet[^>]*>(.*?)</a>', html, re.IGNORECASE | re.DOTALL)
-            if snippets:
-                wynik += "FAKTY Z INTERNETU:\n"
-                for snip in snippets[:3]:
-                    wynik += f"- {re.sub(r'<[^>]+>', '', snip).strip()}\n"
-    except: pass
-    
-    return wynik if wynik else "Brak dostępu do sieci."
-# ==========================================
-# 5. PANEL ADMINISTRATORA I PANEL BOCZNY
-# ==========================================
-st.sidebar.title(f"Zalogowany: {USER_LOGIN} ({USER_ROLA})")
+st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
-    st.session_state.user_auth = None
-    st.rerun()
+    st.session_state.user_auth = None; st.rerun()
 
-# PANEL ADMINISTRATORA
-if USER_ROLA == "admin":
-    st.sidebar.markdown("---")
-    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
-        st.subheader("Zarządzanie użytkownikami")
-        
-        # Opcja 1: Dodawanie profilu
-        st.markdown("**Dodaj nowego użytkownika:**")
-        nowy_user = st.text_input("Nowy login", key="n_user")
-        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
-        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
-        
-        if st.button("UTWÓRZ KONTO"):
-            if nowy_user and nowe_haslo:
-                h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
-                conn = pobierz_polaczenie_db()
-                cur = conn.cursor()
-                try:
-                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
-                    conn.commit()
-                    st.success(f"Konto {nowy_user} stworzone!")
-                except psycopg2.errors.UniqueViolation:
-                    st.error("Taki użytkownik już istnieje.")
-                    conn.rollback()
-                cur.close()
-                conn.close()
-                
-        st.markdown("---")
-        # Opcja 2: Usuwanie i edycja innych kont
-        st.markdown("**Zarządzaj istniejącymi kontami użytkowników:**")
-        conn = pobierz_polaczenie_db()
-        cur = conn.cursor(cursor_factory=DictCursor)
-        cur.execute("SELECT login, rola FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
-        lista_uzytkownikow = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Wybierz konto do modyfikacji", [u["login"] for u in lista_uzytkownikow])
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
-                if st.button("ZAKODUJ NOWE HASŁO"):
-                    if zmien_haslo:
-                        h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
-                        conn = pobierz_polaczenie_db()
-                        cur = conn.cursor()
-                        cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
-                        conn.commit()
-                        cur.close()
-                        conn.close()
-                        st.success("Hasło użytkownika zmienione!")
-            with col2:
-                if st.button("❌ USUŃ KONTO", type="primary"):
-                    conn = pobierz_polaczenie_db()
-                    cur = conn.cursor()
-                    cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
-                    conn.commit()
-                    cur.close()
-                    conn.close()
-                    st.success("Konto skasowane z bazy!")
-                    st.rerun()
+TRYBY = {
+    "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
+    "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona, systemów ERP i logistyki. Pisz czysty kod, myśl strukturalnie i rozwiązuj problemy z architekturą oprogramowania.",
+    "🏀 Trener Koszykówki": "Jesteś analitykiem i trenerem koszykówki. Skup się na dynamice, wydolności, mikrocyklach i technice rzutu zawodników.",
+    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej, w szczególności silników grupy VAG (np. FSI). Podawaj precyzyjne diagnozy i kroki naprawcze."
+}
+wybrany_tryb = st.sidebar.selectbox("🎭 Wybierz Osobistość Agenta", list(TRYBY.keys()))
 
-        st.markdown("---")
-        # Opcja 3: Kompleksowa zmiana własnych danych (Administratora)
-        st.markdown("**Twoje własne konto (Administrator):**")
-        moj_nowy_login = st.text_input("Twój nowy login admina", value=USER_LOGIN, key="admin_login_new")
-        moje_nowe_haslo = st.text_input("Twoje nowe hasło admina (zostaw puste, aby nie zmieniać)", type="password", key="admin_pass")
-        
-        if st.button("ZAKTUALIZUJ MOJE DANE DOSTĘPOWE"):
-            if moj_nowy_login:
-                conn = pobierz_polaczenie_db()
-                cur = conn.cursor()
-                try:
-                    if moje_nowe_haslo:
-                        # Zmiana loginu i hasła jednocześnie
-                        h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
-                        cur.execute(
-                            "UPDATE uzytkownicy SET login = %s, haslo_hash = %s WHERE id = %s",
-                            (moj_nowy_login, h_hash, USER_ID)
-                        )
-                    else:
-                        # Zmiana tylko samego loginu
-                        cur.execute(
-                            "UPDATE uzytkownicy SET login = %s WHERE id = %s",
-                            (moj_nowy_login, USER_ID)
-                        )
-                    
-                    conn.commit()
-                    
-                    # Aktualizacja pamięci podręcznej Streamlit w locie
-                    st.session_state.user_auth["login"] = moj_nowy_login
-                    st.success("Dane administratora zostały pomyślnie zaktualizowane!")
-                    st.rerun()
-                    
-                except psycopg2.errors.UniqueViolation:
-                    st.error("Ten login jest już zajęty przez innego użytkownika!")
-                    conn.rollback()
-                finally:
-                    cur.close()
-                    conn.close()
+st.sidebar.markdown("---")
+with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
+    st.caption("Pliki wgrane tutaj zostają w systemie na zawsze.")
+    plik_kb = st.file_uploader("Wgraj do bazy (PDF/TXT)", type=['pdf', 'txt'], key="kb_upload")
+    if plik_kb and st.button("💾 Zapisz w Bazie Wiedzy"):
+        tresc = ""
+        if plik_kb.type == "application/pdf":
+            reader = PyPDF2.PdfReader(plik_kb)
+            tresc = "".join([page.extract_text() for page in reader.pages])
+        else:
+            tresc = plik_kb.read().decode("utf-8")
+        dodaj_do_bazy_wiedzy(plik_kb.name, tresc)
+        st.success(f"Plik {plik_kb.name} dodany do pamięci trwałej!")
 
-# SEKCJA PLIKÓW I SYSTEMU
-st.title("⚡ Agent V11: Multi-User System")
-st.caption("Napędzany: Llama 3.3 Turbo | Baza Danych: Neon Cloud (PostgreSQL)")
+# ==========================================
+# 5. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
+# ==========================================
+st.title("⚡ Agent V12: Voice, RAG & Personas")
 
-if "doc_memory" not in st.session_state: st.session_state.doc_memory = ""
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
-
 with st.sidebar:
     st.markdown("---")
-    st.subheader("👁️ Załaduj dokumentację")
-    uploaded_file = st.file_uploader("Dodaj PDF, TXT lub Zdjęcie (JPG/PNG)", type=['pdf', 'txt', 'png', 'jpg', 'jpeg'])
-    if uploaded_file:
-        if uploaded_file.type == "application/pdf":
-            reader = PyPDF2.PdfReader(uploaded_file)
-            st.session_state.doc_memory = "".join([page.extract_text() for page in reader.pages])
-            st.session_state.img_memory = None
-            st.success("Dokument wgrany!")
-        elif uploaded_file.type.startswith('image'):
-            st.session_state.img_memory = base64.b64encode(uploaded_file.read()).decode('utf-8')
-            st.session_state.doc_memory = ""
-            st.success("Obraz wgrany!")
-        else:
-            st.session_state.doc_memory = uploaded_file.read().decode("utf-8")
-            st.session_state.img_memory = None
-            st.success("Tekst wgrany!")
-
-    if st.button("🗑️ Wyczyść pamięć podręczną pliku"):
-        st.session_state.doc_memory = ""
-        st.session_state.img_memory = None
-        st.success("Wyczyszczono pamięć dokumentów.")
-
-    if st.button("🧹 Resetuj moją historię rozmów"):
+    st.subheader("👁️ Zmysł Wzroku (Tymczasowy)")
+    zdjecie = st.file_uploader("Dodaj Zdjęcie do analizy", type=['png', 'jpg', 'jpeg'])
+    if zdjecie:
+        st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
+        st.success("Obraz wgrany!")
+    if st.button("🧹 Resetuj rozmowę"):
         wyczysc_historie_db(USER_ID)
-        st.success("Historia wyczyszczona z bazy!")
         st.rerun()
 
-# Ładowanie historii zalogowanego użytkownika bezpośrednio z PostgreSQL
 historia_czatu = pobierz_historie_db(USER_ID)
-
-# ==========================================
-# 6. LOGIKA OBSŁUGI CZATU I PLIKÓW
-# ==========================================
 for msg in historia_czatu:
-    if msg["role"] == "user" and ("KONTEKST DOKUMENTU:" in str(msg["content"]) or "Oto informacje pobrane z internetu" in str(msg["content"])):
-        continue
+    if msg["role"] == "user" and "DODATKOWY KONTEKST Z BAZY WIEDZY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
         text = str(msg["content"])
         if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
         if text: st.markdown(text)
 
-polecenie = st.chat_input("Zadaj pytanie Agentowi...")
+# NOWOŚĆ: Interfejs Głosowy (Mikrofon)
+col_mic, col_input = st.columns([1, 10])
+with col_mic:
+    audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
+with col_input:
+    polecenie_tekst = st.chat_input("Zadaj pytanie lub nagraj dźwięk...")
+
+polecenie = polecenie_tekst
+
+# Obsługa dźwięku z Whisper AI
+if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
+    st.session_state.last_audio = audio_bytes
+    with st.spinner("🎧 Nasłuchuję i transkrybuję..."):
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        try:
+            transkrypcja = client.audio.transcriptions.create(
+                file=("audio.wav", audio_bytes),
+                model="whisper-large-v3",
+                response_format="text"
+            )
+            polecenie = transkrypcja
+        except Exception as e:
+            st.error("Błąd mikrofonu: Upewnij się, że udzieliłeś uprawnień przeglądarce.")
 
 if polecenie:
-    # Zapisujemy czyste pytanie użytkownika w bazie danych
-    zapisz_wiadomosc_db(USER_ID, "user", polecenie)
+    # Krok 1: Automatyczne skanowanie Trwałej Bazy Wiedzy
+    kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
+    zapytanie_do_zapisu = polecenie
+    zapytanie_do_wyslania = polecenie
+    
+    if kontekst_kb:
+        zapytanie_do_wyslania = f"DODATKOWY KONTEKST Z BAZY WIEDZY:\n{kontekst_kb}\n\nPYTANIE: {polecenie}"
+        st.toast("Wykryto powiązane dokumenty w Bazie Wiedzy!", icon="📚")
+
+    zapisz_wiadomosc_db(USER_ID, "user", zapytanie_do_zapisu)
     with st.chat_message("user"): st.markdown(polecenie)
         
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_response = ""
         
-        # Przygotowanie pamięci kontekstowej dla API
-        instrukcja_sys = (
-            "Jesteś elitarnym Agentem AI. Zawsze używaj języka polskiego.\n"
-            "1. Aktualności/Pogoda: Odpowiedz TYLKO 'SEARCH_WEB: [zapytanie]'.\n"
-            "2. Obrazy: Na końcu wypowiedzi dodaj 'GENERATE_IMAGE: [prompt angielski]'.\n"
-            "3. Excel: Jeśli użytkownik chce tabelę, dodaj 'GENERATE_EXCEL:' a pod nim czysty CSV rozdzielany średnikami.\n"
-            "4. PDF: Jeśli użytkownik chce plik PDF, dodaj 'GENERATE_PDF:' a pod nim czysty tekst dokumentu."
-        )
+        instrukcja_sys = TRYBY[wybrany_tryb] + "\nOpcje ukryte: Jeśli zapytany, dodaj GENERATE_IMAGE: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]."
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
         
         if st.session_state.img_memory:
-            api_messages.append({
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": polecenie},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}
-                ]
-            })
-        elif st.session_state.doc_memory:
-            api_messages.append({"role": "user", "content": f"KONTEKST DOKUMENTU:\n{st.session_state.doc_memory}\n\nPYTANIE: {polecenie}"})
+            api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
         else:
-            api_messages.append({"role": "user", "content": polecenie})
+            api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
@@ -377,30 +232,19 @@ if polecenie:
             
             widoczny = full_response.split("GENERATE_")[0].strip()
             placeholder.markdown(widoczny)
-            
-            # Trwały zapis odpowiedzi bota do bazy danych Neon
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            # WYZWALACZE MULTIMEDIALNE
+            # WYZWALACZE PLIKÓW I OBRAZÓW (Zachowane z V11)
             if "GENERATE_IMAGE:" in full_response:
-                prompt = full_response.split("GENERATE_IMAGE:")[1].split("GENERATE_")[0].strip()
-                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=1024&height=1024&nologo=true")
-                
+                st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true")
             if "GENERATE_EXCEL:" in full_response:
-                dane_csv = full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
-                df = pd.read_csv(io.StringIO(dane_csv), sep=";")
-                buffer = io.BytesIO()
-                df.to_excel(buffer, index=False, engine='openpyxl')
-                st.download_button(label="📊 Pobierz plik Excel", data=buffer.getvalue(), file_name="Arkusz_Agent.xlsx", mime="application/vnd.ms-excel")
-
+                df = pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";")
+                buffer = io.BytesIO(); df.to_excel(buffer, index=False, engine='openpyxl')
+                st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
             if "GENERATE_PDF:" in full_response:
-                tekst_pdf = full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()
-                czysty_tekst = unicodedata.normalize('NFKD', tekst_pdf).encode('ascii', 'ignore').decode('utf-8')
-                pdf = FPDF()
-                pdf.add_page()
-                pdf.set_font("Arial", size=12)
-                pdf.multi_cell(0, 10, txt=czysty_tekst)
-                st.download_button(label="📄 Pobierz plik PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument_Agent.pdf", mime="application/pdf")
+                czysty_tekst = unicodedata.normalize('NFKD', full_response.split("GENERATE_PDF:")[1].split("GENERATE_")[0].strip()).encode('ascii', 'ignore').decode('utf-8')
+                pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=czysty_tekst)
+                st.download_button("📄 Pobierz PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
         except Exception as e:
             st.error(f"Problem operacyjny: {e}")
