@@ -13,6 +13,8 @@ from psycopg2.extras import DictCursor
 from fpdf import FPDF
 from groq import Groq
 from audio_recorder_streamlit import audio_recorder
+import requests
+from bs4 import BeautifulSoup
 
 # ==========================================
 # 1. POŁĄCZENIE I INICJALIZACJA BAZY
@@ -25,7 +27,6 @@ def inicjalizuj_baze_danych():
     cur = conn.cursor()
     cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
     cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    # NOWOŚĆ: Tabela trwałej Bazy Wiedzy
     cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
     conn.commit()
     
@@ -43,15 +44,14 @@ try: inicjalizuj_baze_danych()
 except Exception as e: st.error(f"Błąd bazy: {e}"); st.stop()
 
 # ==========================================
-# 2. MECHANIZMY AUTORYZACJI I ZAPISU
+# 2. MECHANIZMY AUTORYZACJI, ZAPISU I SKANOWANIA URL
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
     conn = pobierz_polaczenie_db()
     cur = conn.cursor(cursor_factory=DictCursor)
     cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
     user = cur.fetchone()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
     return user
 
 def zapisz_wiadomosc_db(user_id, rola, tresc):
@@ -74,7 +74,6 @@ def wyczysc_historie_db(user_id):
     cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
     conn.commit(); cur.close(); conn.close()
 
-# NOWOŚĆ: Funkcje Bazy Wiedzy
 def dodaj_do_bazy_wiedzy(nazwa, tresc):
     conn = pobierz_polaczenie_db()
     cur = conn.cursor()
@@ -91,9 +90,22 @@ def szukaj_w_bazie_wiedzy(zapytanie):
     cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
     wyniki = cur.fetchall()
     cur.close(); conn.close()
-    if wyniki:
-        return "\n\n".join([f"[Z pliku: {w[0]}]: {w[1][:1500]}" for w in wyniki])
+    if wyniki: return "\n\n".join([f"[Źródło: {w[0]}]: {w[1][:1500]}" for w in wyniki])
     return ""
+
+# NOWOŚĆ: Funkcja do zgrywania treści ze stron WWW
+def pobierz_tekst_z_url(url):
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # Usuwamy kod JS i CSS, żeby Agent czytał tylko tekst
+        for script in soup(["script", "style", "nav", "footer"]):
+            script.extract()
+        return soup.get_text(separator=' ', strip=True)
+    except Exception as e:
+        return f"BŁĄD: {e}"
 
 # ==========================================
 # 3. INTERFEJS LOGOWANIA
@@ -116,7 +128,7 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 4. NOWOŚĆ: TRYBY EKSPERCKIE I ZARZĄDZANIE WIEDZĄ
+# 4. TRYBY EKSPERCKIE I ZARZĄDZANIE WIEDZĄ
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
@@ -124,17 +136,19 @@ if st.sidebar.button("Wyloguj", type="secondary"):
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona, systemów ERP i logistyki. Pisz czysty kod, myśl strukturalnie i rozwiązuj problemy z architekturą oprogramowania.",
-    "🏀 Trener Koszykówki": "Jesteś analitykiem i trenerem koszykówki. Skup się na dynamice, wydolności, mikrocyklach i technice rzutu zawodników.",
-    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej, w szczególności silników grupy VAG (np. FSI). Podawaj precyzyjne diagnozy i kroki naprawcze."
+    "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP. Pisz czysty kod, myśl strukturalnie.",
+    "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki. Skup się na dynamice i technice rzutu.",
+    "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej (grupa VAG). Podawaj precyzyjne diagnozy."
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Wybierz Osobistość Agenta", list(TRYBY.keys()))
 
 st.sidebar.markdown("---")
 with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
-    st.caption("Pliki wgrane tutaj zostają w systemie na zawsze.")
-    plik_kb = st.file_uploader("Wgraj do bazy (PDF/TXT)", type=['pdf', 'txt'], key="kb_upload")
-    if plik_kb and st.button("💾 Zapisz w Bazie Wiedzy"):
+    st.caption("Pamięć trwała: Wgrane dane zostają na zawsze.")
+    
+    # 4a. Wgrywanie plików
+    plik_kb = st.file_uploader("Wgraj z dysku (PDF/TXT)", type=['pdf', 'txt'], key="kb_upload")
+    if plik_kb and st.button("💾 Zapisz Plik w Bazie"):
         tresc = ""
         if plik_kb.type == "application/pdf":
             reader = PyPDF2.PdfReader(plik_kb)
@@ -142,12 +156,29 @@ with st.sidebar.expander("📚 TRWAŁA BAZA WIEDZY (RAG)", expanded=False):
         else:
             tresc = plik_kb.read().decode("utf-8")
         dodaj_do_bazy_wiedzy(plik_kb.name, tresc)
-        st.success(f"Plik {plik_kb.name} dodany do pamięci trwałej!")
+        st.success(f"Plik {plik_kb.name} dodany do pamięci!")
+
+    st.markdown("---")
+    
+    # 4b. NOWOŚĆ: Skaner Linków (Zgrywarka WWW)
+    st.markdown("**Skanuj stronę internetową:**")
+    url_do_bazy = st.text_input("Wklej pełny link (np. https://...)")
+    if st.button("🔗 Pobierz Treść i Zapisz"):
+        if url_do_bazy.startswith("http"):
+            with st.spinner("🕷️ Agent skanuje podaną stronę..."):
+                tekst_ze_strony = pobierz_tekst_z_url(url_do_bazy)
+                if not tekst_ze_strony.startswith("BŁĄD"):
+                    dodaj_do_bazy_wiedzy(url_do_bazy, tekst_ze_strony)
+                    st.success("✅ Strona zgrana i zapisana w mózgu Agenta!")
+                else:
+                    st.error("Strona blokuje boty lub link jest błędny.")
+        else:
+            st.warning("Link musi zaczynać się od http lub https.")
 
 # ==========================================
 # 5. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent V12: Voice, RAG & Personas")
+st.title("⚡ Agent V13: Web Scanner Edition")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -169,39 +200,31 @@ for msg in historia_czatu:
         if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
         if text: st.markdown(text)
 
-# NOWOŚĆ: Interfejs Głosowy (Mikrofon)
 col_mic, col_input = st.columns([1, 10])
 with col_mic:
     audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
 with col_input:
-    polecenie_tekst = st.chat_input("Zadaj pytanie lub nagraj dźwięk...")
+    polecenie_tekst = st.chat_input("Zadaj pytanie, wklej URL lub nagraj głos...")
 
 polecenie = polecenie_tekst
 
-# Obsługa dźwięku z Whisper AI
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
-    with st.spinner("🎧 Nasłuchuję i transkrybuję..."):
+    with st.spinner("🎧 Transkrybuję..."):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         try:
-            transkrypcja = client.audio.transcriptions.create(
-                file=("audio.wav", audio_bytes),
-                model="whisper-large-v3",
-                response_format="text"
-            )
+            transkrypcja = client.audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
             polecenie = transkrypcja
-        except Exception as e:
-            st.error("Błąd mikrofonu: Upewnij się, że udzieliłeś uprawnień przeglądarce.")
+        except Exception: st.error("Błąd mikrofonu.")
 
 if polecenie:
-    # Krok 1: Automatyczne skanowanie Trwałej Bazy Wiedzy
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     zapytanie_do_zapisu = polecenie
     zapytanie_do_wyslania = polecenie
     
     if kontekst_kb:
         zapytanie_do_wyslania = f"DODATKOWY KONTEKST Z BAZY WIEDZY:\n{kontekst_kb}\n\nPYTANIE: {polecenie}"
-        st.toast("Wykryto powiązane dokumenty w Bazie Wiedzy!", icon="📚")
+        st.toast("Użyto danych ze skanera URL / wgranych plików!", icon="🌐")
 
     zapisz_wiadomosc_db(USER_ID, "user", zapytanie_do_zapisu)
     with st.chat_message("user"): st.markdown(polecenie)
@@ -234,7 +257,6 @@ if polecenie:
             placeholder.markdown(widoczny)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            # WYZWALACZE PLIKÓW I OBRAZÓW (Zachowane z V11)
             if "GENERATE_IMAGE:" in full_response:
                 st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true")
             if "GENERATE_EXCEL:" in full_response:
