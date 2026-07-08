@@ -9,3 +9,4 @@ audio-recorder-streamlit
 requests
 beautifulsoup4
 duckduckgo-search
+gTTS
