@@ -168,7 +168,7 @@ if USER_ROLA == "admin":
         lista_uzytkownikow = cur.fetchall()
         cur.close(); conn.close()
         if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Zarządzaj konto", [u["login"] for u in lista_uzytkownikow])
+            wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
             zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
             if st.button("ZMIEŃ HASŁO"):
                 h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
@@ -207,10 +207,10 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
     if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"): wyczysc_baze_wiedzy(); st.success("Baza wyczyszczona!"); st.rerun()
 
 # ==========================================
-# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU (Z POPRAWIONĄ HISTORIĄ TRWAŁĄ)
+# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.5")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | Persistent Multi-Media History")
+st.title("⚡ Agent AI Max Pro V16.6")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Fixed")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -219,29 +219,23 @@ with st.sidebar:
     if zdjecie: st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8'); st.success("Obraz wgrany!")
     if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.rerun()
 
-# ODTWARZANIE HISTORII - NOWOŚĆ V16.5 (Zabezpieczenie przed znikaniem multimediów)
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
     if msg["role"] == "user" and "KONTEKST SYSTEMOWY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
         raw_text = str(msg["content"])
-        
-        # Wyciąganie i ukrywanie znaczników przed wyświetleniem tekstu
         visible_text = raw_text.split("GENERATE_")[0].strip()
         if "<mysli>" in visible_text and "</mysli>" in visible_text:
             visible_text = visible_text.split("</mysli>")[1].strip()
         
-        if visible_text:
-            st.markdown(visible_text)
+        if visible_text: st.markdown(visible_text)
             
-        # Trwałe renderowanie obrazków z historii, jeśli istniały
         if "GENERATE_IMAGE:" in raw_text:
             try:
                 hist_img_prompt = urllib.parse.quote(raw_text.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
                 st.markdown(f"**🖼️ Zapisana Grafika z historii:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{hist_img_prompt}?width=1024&height=1024&nologo=true)")
             except: pass
             
-        # Trwałe renderowanie przycisków Excel z historii
         if "GENERATE_EXCEL:" in raw_text:
             try:
                 hist_csv_data = raw_text.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
@@ -266,7 +260,7 @@ if polecenie:
     
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Pobieram najnowsze nagłówki..."):
+        with st.spinner("🌍 Pobieram najnowsze nagłówki z sieci..."):
             try:
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(polecenie)}&hl=pl&gl=PL&ceid=PL:pl"
                 res = requests.get(url, timeout=5)
@@ -275,8 +269,9 @@ if polecenie:
                 if items: kontekst_web = "\n".join([f"- {item.text}" for item in items[:6]])
             except: pass
 
+    # USUNIĘTY BŁĘDNY OPERATOR MORSA
     zapytanie_do_wyslania = polecenie
-    if kontekst_kb or BROADCAST_WEB := kontekst_web:
+    if kontekst_kb or kontekst_web:
         zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
         if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
         if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU ---\n{kontekst_web}\n"
@@ -292,18 +287,24 @@ if polecenie:
         aktualny_czas = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         
         instrukcja_sys = TRYBY[wybrany_tryb]
-        instrukcja_sys += f"\n\nWAŻNE INFORMACJE O CZASIE RZECZYWISTYM: Dzisiejsza data to {aktualny_czas}. Obecny rok to bezwzględnie 2026. Absolutnie nie twierdz, że masz wiedzę tylko do 2023 r."
+        
+        # WZMOCNIONA BLOKADA HALUCYNACJI DATY
+        instrukcja_sys += (
+            f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
+            "ABSOLUTNY ZAKAZ: Nigdy nie powołuj się na 'wiedzę ograniczoną do 2023 r.' lub podobne wymówki. "
+            "Jeśli nie masz informacji z sieci o dzisiejszym dniu, napisz po prostu: 'Brak nowych informacji w sieci na ten temat'."
+        )
         
         profil_usera = pobierz_profil(USER_ID)
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
         if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
         
         instrukcja_sys += (
-            "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE (BARDZO WAŻNE) ---\n"
-            "Jeśli użytkownik prosi o ZDJĘCIE/GRAFIKĘ, na samym końcu odpowiedzi MUSISZ dodać: GENERATE_IMAGE: [prompt po angielsku, np. a truck on highway].\n"
-            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami].\n"
-            "Jeśli użytkownik prosi o PDF, MUSISZ dodać: GENERATE_PDF: [czysty tekst].\n"
-            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do błahostek. Format: GENERATE_CODE: [czysty kod Python]."
+            "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\n"
+            "ZDJĘCIE/GRAFIKA -> dodaj: GENERATE_IMAGE: [prompt angielski]\n"
+            "EXCEL -> dodaj: GENERATE_EXCEL: [dane CSV ze średnikami]\n"
+            "PDF -> dodaj: GENERATE_PDF: [tekst]\n"
+            "KOD/MATEMATYKA -> dodaj: GENERATE_CODE: [czysty kod Python]."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
