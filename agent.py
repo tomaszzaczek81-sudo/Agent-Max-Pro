@@ -15,11 +15,11 @@ from groq import Groq
 from audio_recorder_streamlit import audio_recorder
 import requests
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 from gtts import gTTS
 import sys
 from contextlib import redirect_stdout
 import datetime
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -142,12 +142,11 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. PANEL BOCZNY (Z PRZYWRÓCONYM ADMINEM)
+# 5. PANEL BOCZNY 
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
-# PRZYWRÓCONY PANEL ADMINISTRATORA
 if USER_ROLA == "admin":
     st.sidebar.markdown("---")
     with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
@@ -210,8 +209,8 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.1")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | TTS | Live Search")
+st.title("⚡ Agent AI Max Pro V16.2")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -243,22 +242,25 @@ if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
+    
+    # NOWOŚĆ V16.2: Skanowanie RSS (Niezablokowane przez chmurę)
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Przeszukuję sieć (Stealth Mode)..."):
+        with st.spinner("🌍 Pobieram najnowsze nagłówki z serwisów informacyjnych..."):
             try:
-                url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(polecenie)}"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=5) as res:
-                    snippets = re.findall(r'class="result__snippet[^>]*>(.*?)</a>', res.read().decode('utf-8'), re.IGNORECASE | re.DOTALL)
-                    if snippets: kontekst_web = "\n".join([f"- {re.sub(r'<[^>]+>', '', snip).strip()}" for snip in snippets[:4]])
+                url = f"https://news.google.com/rss/search?q={urllib.parse.quote(polecenie)}&hl=pl&gl=PL&ceid=PL:pl"
+                res = requests.get(url, timeout=5)
+                root = ET.fromstring(res.content)
+                items = root.findall('.//item/title')
+                if items:
+                    kontekst_web = "\n".join([f"- {item.text}" for item in items[:6]])
             except: pass
 
     zapytanie_do_wyslania = polecenie
     if kontekst_kb or kontekst_web:
         zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
         if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
-        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU ---\n{kontekst_web}\n"
+        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU (NAJŚWIEŻSZE) ---\n{kontekst_web}\n"
         zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
@@ -277,9 +279,11 @@ if polecenie:
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
         if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
         
+        # DYSCYPLINA KODU V16.2
         instrukcja_sys += (
             "\nUKRYTE KOMENDY: GENERATE_IMAGE: [prompt], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]. "
-            "JEŚLI musisz wykonać matematykę lub logikę, napisz na końcu 'GENERATE_CODE: [Twój kod Python]'. System uruchomi go za Ciebie."
+            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do wypisywania błahych komunikatów, tekstu typu 'brak informacji', czy prostych odpowiedzi. "
+            "GENERATE_CODE: [Twój kod Python] ma być użyte TYLKO I WYŁĄCZNIE gdy proszony jesteś o skomplikowane obliczenia matematyczne lub generowanie wykresów!"
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
