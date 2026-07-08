@@ -209,8 +209,8 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.3")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Forced Triggers")
+st.title("⚡ Agent AI Max Pro V16.4")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Safe Triggers")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -278,11 +278,10 @@ if polecenie:
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
         if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
         
-        # WZMOCNIONE WYZWALACZE V16.3
         instrukcja_sys += (
             "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE (BARDZO WAŻNE) ---\n"
             "Jeśli użytkownik prosi o ZDJĘCIE/GRAFIKĘ, na samym końcu odpowiedzi MUSISZ dodać: GENERATE_IMAGE: [prompt po angielsku, np. a truck on highway].\n"
-            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami, bez żadnych znaczników typu ```csv].\n"
+            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami, bez znaczników typu ```csv].\n"
             "Jeśli użytkownik prosi o WIDEO, MUSISZ dodać: GENERATE_VIDEO: [prompt po angielsku].\n"
             "Jeśli użytkownik prosi o PDF, MUSISZ dodać: GENERATE_PDF: [czysty tekst].\n"
             "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do błahostek. Używaj jej TYLKO do zaawansowanych obliczeń matematycznych. Format: GENERATE_CODE: [czysty kod Python]."
@@ -311,35 +310,43 @@ if polecenie:
             widoczny_koniec = full_response.split("GENERATE_")[0].strip()
             odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
             placeholder.markdown(odpowiedz_finalna)
-            
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
-            
-            if tts_mode and odpowiedz_finalna:
+        except Exception as e:
+            st.error(f"Problem operacyjny z modelem: {e}")
+
+        # WYZWALACZE NIEZALEŻNE (BEZPIECZNE)
+        if tts_mode and odpowiedz_finalna:
+            try:
                 with st.spinner("🎙️ Generowanie głosu..."):
-                    try:
-                        tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
-                        tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
-                        st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
-                    except Exception as e: st.warning("Błąd generowania głosu.")
-            
-            if "GENERATE_CODE:" in full_response:
+                    tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
+                    tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
+                    st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
+            except Exception as e: st.warning("Błąd generowania głosu.")
+        
+        if "GENERATE_CODE:" in full_response:
+            try:
                 kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
                 kod = re.sub(r'```python|```', '', kod).strip()
                 st.markdown("**💻 Interpreter Pythona - Uruchomiony kod:**")
                 st.code(kod, language="python")
                 f = io.StringIO()
                 with redirect_stdout(f):
-                    try:
-                        exec(kod)
-                        wynik_kodu = f.getvalue()
-                        if wynik_kodu: st.info(f"**Wynik z serwera:**\n{wynik_kodu}")
-                        else: st.info("**Wynik z serwera:** Kod wykonany pomyślnie (brak print).")
-                    except Exception as e:
-                        st.error(f"**Błąd wykonania:** {e}")
+                    exec(kod)
+                wynik_kodu = f.getvalue()
+                if wynik_kodu: st.info(f"**Wynik z serwera:**\n{wynik_kodu}")
+                else: st.info("**Wynik z serwera:** Kod wykonany pomyślnie (brak print).")
+            except Exception as e: st.error(f"**Błąd wykonania kodu:** {e}")
 
-            if "GENERATE_IMAGE:" in full_response: st.image(f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true")
-            if "GENERATE_EXCEL:" in full_response:
-                buffer = io.BytesIO(); pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";").to_excel(buffer, index=False, engine='openpyxl')
+        if "GENERATE_IMAGE:" in full_response:
+            try:
+                img_prompt = urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
+                st.markdown(f"**🖼️ Wygenerowana Grafika:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{img_prompt}?width=1024&height=1024&nologo=true)")
+            except Exception as e: st.warning(f"Błąd obrazu: {e}")
+            
+        if "GENERATE_EXCEL:" in full_response:
+            try:
+                csv_data = full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
+                buffer = io.BytesIO()
+                pd.read_csv(io.StringIO(csv_data), sep=";").to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
-                
-        except Exception as e: st.error(f"Problem operacyjny: {e}")
+            except Exception as e: st.warning(f"Błąd arkusza: {e}")
