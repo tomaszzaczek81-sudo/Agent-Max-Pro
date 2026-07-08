@@ -168,7 +168,7 @@ if USER_ROLA == "admin":
         lista_uzytkownikow = cur.fetchall()
         cur.close(); conn.close()
         if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
+            wybrany_uzytkownik = st.selectbox("Zarządzaj konto", [u["login"] for u in lista_uzytkownikow])
             zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
             if st.button("ZMIEŃ HASŁO"):
                 h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
@@ -207,10 +207,10 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
     if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"): wyczysc_baze_wiedzy(); st.success("Baza wyczyszczona!"); st.rerun()
 
 # ==========================================
-# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
+# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU (Z POPRAWIONĄ HISTORIĄ TRWAŁĄ)
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.4")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Safe Triggers")
+st.title("⚡ Agent AI Max Pro V16.5")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | Persistent Multi-Media History")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -219,19 +219,40 @@ with st.sidebar:
     if zdjecie: st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8'); st.success("Obraz wgrany!")
     if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.rerun()
 
+# ODTWARZANIE HISTORII - NOWOŚĆ V16.5 (Zabezpieczenie przed znikaniem multimediów)
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
     if msg["role"] == "user" and "KONTEKST SYSTEMOWY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
-        text = str(msg["content"])
-        if "GENERATE_" in text: text = text.split("GENERATE_")[0].strip()
-        if "<mysli>" in text and "</mysli>" in text:
-            st.markdown(text.split("</mysli>")[1].strip())
-        else: st.markdown(text)
+        raw_text = str(msg["content"])
+        
+        # Wyciąganie i ukrywanie znaczników przed wyświetleniem tekstu
+        visible_text = raw_text.split("GENERATE_")[0].strip()
+        if "<mysli>" in visible_text and "</mysli>" in visible_text:
+            visible_text = visible_text.split("</mysli>")[1].strip()
+        
+        if visible_text:
+            st.markdown(visible_text)
+            
+        # Trwałe renderowanie obrazków z historii, jeśli istniały
+        if "GENERATE_IMAGE:" in raw_text:
+            try:
+                hist_img_prompt = urllib.parse.quote(raw_text.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
+                st.markdown(f"**🖼️ Zapisana Grafika z historii:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{hist_img_prompt}?width=1024&height=1024&nologo=true)")
+            except: pass
+            
+        # Trwałe renderowanie przycisków Excel z historii
+        if "GENERATE_EXCEL:" in raw_text:
+            try:
+                hist_csv_data = raw_text.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
+                h_buffer = io.BytesIO()
+                pd.read_csv(io.StringIO(hist_csv_data), sep=";").to_excel(h_buffer, index=False, engine='openpyxl')
+                st.download_button("📊 Pobierz Archiwalny Excel", data=h_buffer.getvalue(), file_name="Arkusz_Archiwum.xlsx", mime="application/vnd.ms-excel", key=hashlib.mdigest(raw_text.encode()).hexdigest()[:10])
+            except: pass
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub zapytaj o dzisiejsze wiadomości...")
+with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub wygeneruj multimedia...")
 
 if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
@@ -245,21 +266,20 @@ if polecenie:
     
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Pobieram najnowsze nagłówki z serwisów informacyjnych..."):
+        with st.spinner("🌍 Pobieram najnowsze nagłówki..."):
             try:
                 url = f"https://news.google.com/rss/search?q={urllib.parse.quote(polecenie)}&hl=pl&gl=PL&ceid=PL:pl"
                 res = requests.get(url, timeout=5)
                 root = ET.fromstring(res.content)
                 items = root.findall('.//item/title')
-                if items:
-                    kontekst_web = "\n".join([f"- {item.text}" for item in items[:6]])
+                if items: kontekst_web = "\n".join([f"- {item.text}" for item in items[:6]])
             except: pass
 
     zapytanie_do_wyslania = polecenie
-    if kontekst_kb or kontekst_web:
+    if kontekst_kb or BROADCAST_WEB := kontekst_web:
         zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
         if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
-        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU (NAJŚWIEŻSZE) ---\n{kontekst_web}\n"
+        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU ---\n{kontekst_web}\n"
         zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
@@ -281,10 +301,9 @@ if polecenie:
         instrukcja_sys += (
             "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE (BARDZO WAŻNE) ---\n"
             "Jeśli użytkownik prosi o ZDJĘCIE/GRAFIKĘ, na samym końcu odpowiedzi MUSISZ dodać: GENERATE_IMAGE: [prompt po angielsku, np. a truck on highway].\n"
-            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami, bez znaczników typu ```csv].\n"
-            "Jeśli użytkownik prosi o WIDEO, MUSISZ dodać: GENERATE_VIDEO: [prompt po angielsku].\n"
+            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami].\n"
             "Jeśli użytkownik prosi o PDF, MUSISZ dodać: GENERATE_PDF: [czysty tekst].\n"
-            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do błahostek. Używaj jej TYLKO do zaawansowanych obliczeń matematycznych. Format: GENERATE_CODE: [czysty kod Python]."
+            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do błahostek. Format: GENERATE_CODE: [czysty kod Python]."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
@@ -295,10 +314,7 @@ if polecenie:
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            stream = client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile",
-                messages=api_messages, stream=True
-            )
+            stream = client.chat.completions.create(model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile", messages=api_messages, stream=True)
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
@@ -311,17 +327,15 @@ if polecenie:
             odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
             placeholder.markdown(odpowiedz_finalna)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
-        except Exception as e:
-            st.error(f"Problem operacyjny z modelem: {e}")
+        except Exception as e: st.error(f"Problem operacyjny: {e}")
 
-        # WYZWALACZE NIEZALEŻNE (BEZPIECZNE)
+        # WYZWALACZE BEZPIECZNE (DLA BIEŻĄCEJ WIADOMOŚCI)
         if tts_mode and odpowiedz_finalna:
             try:
-                with st.spinner("🎙️ Generowanie głosu..."):
-                    tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
-                    tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
-                    st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
-            except Exception as e: st.warning("Błąd generowania głosu.")
+                tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
+                tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
+                st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
+            except: pass
         
         if "GENERATE_CODE:" in full_response:
             try:
@@ -330,18 +344,15 @@ if polecenie:
                 st.markdown("**💻 Interpreter Pythona - Uruchomiony kod:**")
                 st.code(kod, language="python")
                 f = io.StringIO()
-                with redirect_stdout(f):
-                    exec(kod)
-                wynik_kodu = f.getvalue()
-                if wynik_kodu: st.info(f"**Wynik z serwera:**\n{wynik_kodu}")
-                else: st.info("**Wynik z serwera:** Kod wykonany pomyślnie (brak print).")
-            except Exception as e: st.error(f"**Błąd wykonania kodu:** {e}")
+                with redirect_stdout(f): exec(kod)
+                if f.getvalue(): st.info(f"**Wynik z serwera:**\n{f.getvalue()}")
+            except Exception as e: st.error(f"**Błąd kodu:** {e}")
 
         if "GENERATE_IMAGE:" in full_response:
             try:
                 img_prompt = urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
                 st.markdown(f"**🖼️ Wygenerowana Grafika:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{img_prompt}?width=1024&height=1024&nologo=true)")
-            except Exception as e: st.warning(f"Błąd obrazu: {e}")
+            except: pass
             
         if "GENERATE_EXCEL:" in full_response:
             try:
@@ -349,4 +360,4 @@ if polecenie:
                 buffer = io.BytesIO()
                 pd.read_csv(io.StringIO(csv_data), sep=";").to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
-            except Exception as e: st.warning(f"Błąd arkusza: {e}")
+            except: pass
