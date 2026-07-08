@@ -6,3 +6,5 @@ openpyxl
 fpdf2
 psycopg2-binary
 audio-recorder-streamlit
+requests
+beautifulsoup4
