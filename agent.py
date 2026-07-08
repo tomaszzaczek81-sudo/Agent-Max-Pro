@@ -395,9 +395,10 @@ if polecenie:
             api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
+            try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
-                model="llama-3.2-90b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile",
+                model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile",
                 messages=api_messages,
                 stream=True
             )
