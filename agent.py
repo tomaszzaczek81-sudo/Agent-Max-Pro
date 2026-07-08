@@ -395,7 +395,7 @@ if polecenie:
             api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
-            try:
+           try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile",
@@ -424,4 +424,5 @@ if polecenie:
                 pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=czysty_tekst)
                 st.download_button("📄 Pobierz Dokument PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
+        except Exception as e: st.error(f"Problem operacyjny: {e}")
         except Exception as e: st.error(f"Problem operacyjny: {e}")
