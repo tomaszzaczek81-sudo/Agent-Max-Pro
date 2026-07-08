@@ -199,13 +199,11 @@ st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
     st.session_state.user_auth = None; st.rerun()
 
-# PRZYWRÓCONY PANEL ADMINISTRATORA
 if USER_ROLA == "admin":
     st.sidebar.markdown("---")
     with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
         st.subheader("Zarządzanie użytkownikami")
         
-        # Opcja 1: Dodawanie profilu
         st.markdown("**Dodaj nowego użytkownika:**")
         nowy_user = st.text_input("Nowy login", key="n_user")
         nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
@@ -225,7 +223,6 @@ if USER_ROLA == "admin":
                 cur.close(); conn.close()
                 
         st.markdown("---")
-        # Opcja 2: Usuwanie i edycja innych kont
         st.markdown("**Zarządzaj istniejącymi kontami:**")
         conn = pobierz_polaczenie_db()
         cur = conn.cursor(cursor_factory=DictCursor)
@@ -255,7 +252,6 @@ if USER_ROLA == "admin":
                 st.rerun()
 
         st.markdown("---")
-        # Opcja 3: Zmiana własnych danych (Administratora)
         st.markdown("**Twoje własne konto (Administrator):**")
         moj_nowy_login = st.text_input("Twój nowy login", value=USER_LOGIN, key="admin_login_new")
         moje_nowe_haslo = st.text_input("Twoje nowe hasło (zostaw puste, aby nie zmieniać)", type="password", key="admin_pass")
@@ -395,7 +391,6 @@ if polecenie:
             api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
-           try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
             stream = client.chat.completions.create(
                 model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile",
@@ -424,5 +419,5 @@ if polecenie:
                 pdf = FPDF(); pdf.add_page(); pdf.set_font("Arial", size=12); pdf.multi_cell(0, 10, txt=czysty_tekst)
                 st.download_button("📄 Pobierz Dokument PDF", data=pdf.output(dest='S').encode('latin1'), file_name="Dokument.pdf", mime="application/pdf")
                 
-        except Exception as e: st.error(f"Problem operacyjny: {e}")
-        except Exception as e: st.error(f"Problem operacyjny: {e}")
+        except Exception as e:
+            st.error(f"Problem operacyjny: {e}")
