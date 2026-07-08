@@ -147,7 +147,7 @@ def bezpieczne_wyszukiwanie(zapytanie):
     if "pogod" in zapytanie.lower():
         try:
             miasta = re.findall(r'\b[A-Z][a-ząćęłńóśźż]+\b', zapytanie)
-            miasto = cities[0] if miasta else zapytanie.split()[-1]
+            miasto = miasta[0] if miasta else zapytanie.split()[-1]
             url = f"https://wttr.in/{urllib.parse.quote(miasto)}?format=3"
             req = urllib.request.Request(url, headers={'User-Agent': 'curl'})
             with urllib.request.urlopen(req, timeout=3) as res:
@@ -165,7 +165,7 @@ def bezpieczne_wyszukiwanie(zapytanie):
                 wynik += "FAKTY Z INTERNETU:\n"
                 for snip in snippets[:3]:
                     wynik += f"- {re.sub(r'<[^>]+>', '', snip).strip()}\n"
-    except: pass
+        except: pass
     return wynik if wynik else "Brak dostępu do sieci."
 
 # ==========================================
@@ -204,8 +204,8 @@ if USER_ROLA == "admin":
                 conn.close()
                 
         st.markdown("---")
-        # Opcja 2: Usuwanie i edycja kont
-        st.markdown("**Zarządzaj istniejącymi:**")
+        # Opcja 2: Usuwanie i edycja innych kont
+        st.markdown("**Zarządzaj istniejącymi kontami użytkowników:**")
         conn = pobierz_polaczenie_db()
         cur = conn.cursor(cursor_factory=DictCursor)
         cur.execute("SELECT login, rola FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
@@ -214,11 +214,11 @@ if USER_ROLA == "admin":
         conn.close()
         
         if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Wybierz konto", [u["login"] for u in lista_uzytkownikow])
+            wybrany_uzytkownik = st.selectbox("Wybierz konto do modyfikacji", [u["login"] for u in lista_uzytkownikow])
             
             col1, col2 = st.columns(2)
             with col1:
-                zmien_haslo = st.text_input("Nowe hasło konta", type="password")
+                zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
                 if st.button("ZAKODUJ NOWE HASŁO"):
                     if zmien_haslo:
                         h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
@@ -228,9 +228,9 @@ if USER_ROLA == "admin":
                         conn.commit()
                         cur.close()
                         conn.close()
-                        st.success("Hasło zmienione!")
+                        st.success("Hasło użytkownika zmienione!")
             with col2:
-                if st.button("❌ USUŃ KONTO COMPLETELY", type="primary"):
+                if st.button("❌ USUŃ KONTO", type="primary"):
                     conn = pobierz_polaczenie_db()
                     cur = conn.cursor()
                     cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
@@ -239,21 +239,45 @@ if USER_ROLA == "admin":
                     conn.close()
                     st.success("Konto skasowane z bazy!")
                     st.rerun()
-                    st.markdown("---")
-        # Opcja 3: Zmiana własnego hasła (Administratora)
-        st.markdown("**Twoje konto (Administrator):**")
-        moje_nowe_haslo = st.text_input("Nowe hasło dla Ciebie", type="password", key="admin_pass")
+
+        st.markdown("---")
+        # Opcja 3: Kompleksowa zmiana własnych danych (Administratora)
+        st.markdown("**Twoje własne konto (Administrator):**")
+        moj_nowy_login = st.text_input("Twój nowy login admina", value=USER_LOGIN, key="admin_login_new")
+        moje_nowe_haslo = st.text_input("Twoje nowe hasło admina (zostaw puste, aby nie zmieniać)", type="password", key="admin_pass")
         
-        if st.button("ZAKTUALIZUJ MOJE HASŁO"):
-            if moje_nowe_haslo:
-                h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
+        if st.button("ZAKTUALIZUJ MOJE DANE DOSTĘPOWE"):
+            if moj_nowy_login:
                 conn = pobierz_polaczenie_db()
                 cur = conn.cursor()
-                cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, USER_LOGIN))
-                conn.commit()
-                cur.close()
-                conn.close()
-                st.success("Twoje hasło zostało zmienione! Zaloguj się nowym hasłem przy następnej wizycie.")
+                try:
+                    if moje_nowe_haslo:
+                        # Zmiana loginu i hasła jednocześnie
+                        h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
+                        cur.execute(
+                            "UPDATE uzytkownicy SET login = %s, haslo_hash = %s WHERE id = %s",
+                            (moj_nowy_login, h_hash, USER_ID)
+                        )
+                    else:
+                        # Zmiana tylko samego loginu
+                        cur.execute(
+                            "UPDATE uzytkownicy SET login = %s WHERE id = %s",
+                            (moj_nowy_login, USER_ID)
+                        )
+                    
+                    conn.commit()
+                    
+                    # Aktualizacja pamięci podręcznej Streamlit w locie
+                    st.session_state.user_auth["login"] = moj_nowy_login
+                    st.success("Dane administratora zostały pomyślnie zaktualizowane!")
+                    st.rerun()
+                    
+                except psycopg2.errors.UniqueViolation:
+                    st.error("Ten login jest już zajęty przez innego użytkownika!")
+                    conn.rollback()
+                finally:
+                    cur.close()
+                    conn.close()
 
 # SEKCJA PLIKÓW I SYSTEMU
 st.title("⚡ Agent V11: Multi-User System")
@@ -281,7 +305,7 @@ with st.sidebar:
             st.session_state.img_memory = None
             st.success("Tekst wgrany!")
 
-    if st.button("🗑️ Wyczyść pamięć podręczną"):
+    if st.button("🗑️ Wyczyść pamięć podręczną pliku"):
         st.session_state.doc_memory = ""
         st.session_state.img_memory = None
         st.success("Wyczyszczono pamięć dokumentów.")
