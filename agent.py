@@ -209,8 +209,8 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.2")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News")
+st.title("⚡ Agent AI Max Pro V16.3")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Forced Triggers")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -243,7 +243,6 @@ if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
     
-    # NOWOŚĆ V16.2: Skanowanie RSS (Niezablokowane przez chmurę)
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
         with st.spinner("🌍 Pobieram najnowsze nagłówki z serwisów informacyjnych..."):
@@ -279,11 +278,14 @@ if polecenie:
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
         if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
         
-        # DYSCYPLINA KODU V16.2
+        # WZMOCNIONE WYZWALACZE V16.3
         instrukcja_sys += (
-            "\nUKRYTE KOMENDY: GENERATE_IMAGE: [prompt], GENERATE_VIDEO: [prompt], GENERATE_EXCEL: [csv], GENERATE_PDF: [tekst]. "
-            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do wypisywania błahych komunikatów, tekstu typu 'brak informacji', czy prostych odpowiedzi. "
-            "GENERATE_CODE: [Twój kod Python] ma być użyte TYLKO I WYŁĄCZNIE gdy proszony jesteś o skomplikowane obliczenia matematyczne lub generowanie wykresów!"
+            "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE (BARDZO WAŻNE) ---\n"
+            "Jeśli użytkownik prosi o ZDJĘCIE/GRAFIKĘ, na samym końcu odpowiedzi MUSISZ dodać: GENERATE_IMAGE: [prompt po angielsku, np. a truck on highway].\n"
+            "Jeśli użytkownik prosi o EXCEL, MUSISZ dodać: GENERATE_EXCEL: [dane w formacie CSV oddzielone średnikami, bez żadnych znaczników typu ```csv].\n"
+            "Jeśli użytkownik prosi o WIDEO, MUSISZ dodać: GENERATE_VIDEO: [prompt po angielsku].\n"
+            "Jeśli użytkownik prosi o PDF, MUSISZ dodać: GENERATE_PDF: [czysty tekst].\n"
+            "ABSOLUTNY ZAKAZ: Nigdy nie używaj komendy GENERATE_CODE do błahostek. Używaj jej TYLKO do zaawansowanych obliczeń matematycznych. Format: GENERATE_CODE: [czysty kod Python]."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
@@ -335,7 +337,7 @@ if polecenie:
                     except Exception as e:
                         st.error(f"**Błąd wykonania:** {e}")
 
-            if "GENERATE_IMAGE:" in full_response: st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true")
+            if "GENERATE_IMAGE:" in full_response: st.image(f"[https://image.pollinations.ai/prompt/](https://image.pollinations.ai/prompt/){urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true")
             if "GENERATE_EXCEL:" in full_response:
                 buffer = io.BytesIO(); pd.read_csv(io.StringIO(full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()), sep=";").to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
