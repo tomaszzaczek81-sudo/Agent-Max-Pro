@@ -5,3 +5,4 @@ pandas
 openpyxl
 fpdf2
 psycopg2-binary
+audio-recorder-streamlit
