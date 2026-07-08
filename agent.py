@@ -21,35 +21,27 @@ from bs4 import BeautifulSoup
 # ==========================================
 st.set_page_config(page_title="Agent AI Max Pro", layout="wide", page_icon="⚡")
 
-# Wstrzyknięcie stylów wzorowanych na systemach Apple (macOS/iOS)
 apple_theme_css = """
 <style>
-    /* Globalna zmiana czcionki na systemową Apple */
     html, body, [class*="css"], .stApp {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        background-color: #161617; /* Głęboka czerń/grafit Apple */
-        color: #F5F5F7; /* Jasnoszary tekst Apple */
+        background-color: #161617;
+        color: #F5F5F7;
     }
-    
-    /* Panel boczny (Sidebar) - efekt półprzezroczystego Midnight/Space Gray */
     [data-testid="stSidebar"] {
         background-color: #1E1E1F !important;
         border-right: 1px solid #333336;
     }
-    
-    /* Profesjonalne nagłówki */
     h1, h2, h3 {
         color: #FFFFFF !important;
         font-weight: 600 !important;
         letter-spacing: -0.022em !important;
     }
-    
-    /* Przyciski w stylu Apple (Domyślne i Primary) */
     .stButton>button {
         background-color: #2D2D2F;
         color: #F5F5F7;
         border: 1px solid #424245;
-        border-radius: 8px; /* Charakterystyczne subtelne zaokrąglenie Apple */
+        border-radius: 8px;
         padding: 8px 16px;
         font-weight: 500;
         transition: all 0.2s ease;
@@ -59,8 +51,6 @@ apple_theme_css = """
         border-color: #68686E;
         color: #FFFFFF;
     }
-    
-    /* Przyciski główne (Primary) - klasyczny Apple Blue */
     .stButton>button[data-testid="baseButton-primary"] {
         background-color: #0071E3 !important;
         border: none !important;
@@ -70,8 +60,6 @@ apple_theme_css = """
         background-color: #147CE5 !important;
         box-shadow: 0 0 8px rgba(0,113,227,0.4);
     }
-    
-    /* Okna wprowadzania tekstu i formularze */
     .stTextInput>div>div>input, .stSelectbox>div>div>div {
         background-color: #1E1E1F !important;
         color: #FFFFFF !important;
@@ -82,8 +70,6 @@ apple_theme_css = """
         border-color: #0071E3 !important;
         box-shadow: 0 0 0 3px rgba(0,113,227,0.2) !important;
     }
-    
-    /* Kontenery wiadomości czatu (Bąbelki) */
     [data-testid="stChatMessage"] {
         background-color: #1E1E1F !important;
         border: 1px solid #2D2D2F !important;
@@ -91,8 +77,6 @@ apple_theme_css = """
         padding: 16px !important;
         margin-bottom: 12px !important;
     }
-    
-    /* Rozwijane menu (Expander) */
     .stDetails {
         background-color: #1E1E1F !important;
         border: 1px solid #2D2D2F !important;
@@ -209,22 +193,99 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. NOWOŚĆ: TRYBY EKSPERCKIE (W TYM INŻYNIER PROMPTÓW)
+# 5. PANEL ADMINISTRATORA I TRYBY EKSPERCKIE
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"):
     st.session_state.user_auth = None; st.rerun()
 
+# PRZYWRÓCONY PANEL ADMINISTRATORA
+if USER_ROLA == "admin":
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
+        st.subheader("Zarządzanie użytkownikami")
+        
+        # Opcja 1: Dodawanie profilu
+        st.markdown("**Dodaj nowego użytkownika:**")
+        nowy_user = st.text_input("Nowy login", key="n_user")
+        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
+        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
+        if st.button("UTWÓRZ KONTO"):
+            if nowy_user and nowe_haslo:
+                h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
+                conn = pobierz_polaczenie_db()
+                cur = conn.cursor()
+                try:
+                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
+                    conn.commit()
+                    st.success(f"Konto {nowy_user} stworzone!")
+                except psycopg2.errors.UniqueViolation:
+                    st.error("Taki użytkownik już istnieje.")
+                    conn.rollback()
+                cur.close(); conn.close()
+                
+        st.markdown("---")
+        # Opcja 2: Usuwanie i edycja innych kont
+        st.markdown("**Zarządzaj istniejącymi kontami:**")
+        conn = pobierz_polaczenie_db()
+        cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT login, rola FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+        lista_uzytkownikow = cur.fetchall()
+        cur.close(); conn.close()
+        
+        if lista_uzytkownikow:
+            wybrany_uzytkownik = st.selectbox("Wybierz konto do modyfikacji", [u["login"] for u in lista_uzytkownikow])
+            zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
+            if st.button("ZAKODUJ NOWE HASŁO"):
+                if zmien_haslo:
+                    h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                    conn = pobierz_polaczenie_db()
+                    cur = conn.cursor()
+                    cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                    conn.commit()
+                    cur.close(); conn.close()
+                    st.success("Hasło użytkownika zmienione!")
+            if st.button("❌ USUŃ KONTO", type="primary"):
+                conn = pobierz_polaczenie_db()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
+                conn.commit()
+                cur.close(); conn.close()
+                st.success("Konto skasowane z bazy!")
+                st.rerun()
+
+        st.markdown("---")
+        # Opcja 3: Zmiana własnych danych (Administratora)
+        st.markdown("**Twoje własne konto (Administrator):**")
+        moj_nowy_login = st.text_input("Twój nowy login", value=USER_LOGIN, key="admin_login_new")
+        moje_nowe_haslo = st.text_input("Twoje nowe hasło (zostaw puste, aby nie zmieniać)", type="password", key="admin_pass")
+        if st.button("ZAKTUALIZUJ MOJE DANE"):
+            if moj_nowy_login:
+                conn = pobierz_polaczenie_db()
+                cur = conn.cursor()
+                try:
+                    if moje_nowe_haslo:
+                        h_hash = hashlib.sha256(moje_nowe_haslo.encode()).hexdigest()
+                        cur.execute("UPDATE uzytkownicy SET login = %s, haslo_hash = %s WHERE id = %s", (moj_nowy_login, h_hash, USER_ID))
+                    else:
+                        cur.execute("UPDATE uzytkownicy SET login = %s WHERE id = %s", (moj_nowy_login, USER_ID))
+                    conn.commit()
+                    st.session_state.user_auth["login"] = moj_nowy_login
+                    st.success("Dane zaktualizowane!")
+                    st.rerun()
+                except psycopg2.errors.UniqueViolation:
+                    st.error("Ten login jest już zajęty!")
+                    conn.rollback()
+                finally:
+                    cur.close(); conn.close()
+
+st.sidebar.markdown("---")
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
     "✍️ Inżynier Promptów (PL/ENG)": (
-        "Jesteś światowej klasy, elitarnym Inżynierem Promptów (Prompt Engineer). "
-        "Twoim jedynym zadaniem jest tworzenie potężnych, precyzyjnych i maksymalnie skutecznych promptów strukturalnych "
-        "dla modeli LLM (ChatGPT, Claude, Llama). Kiedy użytkownik poda Ci temat lub cel: "
-        "1. Przeanalizuj intencję. 2. Wygeneruj profesjonalny, rozbudowany prompt strukturalny w języku polskim. "
-        "3. Przetłumacz go lub stwórz alternatywną, zoptymalizowaną wersję w języku angielskim (modele często działają lepiej po angielsku). "
-        "Używaj zaawansowanych technik inżynierii promptów: przypisywanie ról (Role-playing), określanie kontekstu, "
-        "precyzyjne ograniczenia (Constraints), instrukcje krok po kroku (Chain-of-Thought) oraz format wyjściowy (Output format)."
+        "Jesteś światowej klasy Inżynierem Promptów. Twoim jedynym zadaniem jest tworzenie potężnych, "
+        "precyzyjnych i skutecznych promptów strukturalnych dla modeli LLM. "
+        "Wygeneruj profesjonalny prompt po polsku, a następnie przetłumacz go na wersję angielską."
     ),
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP. Pisz czysty kod, myśl strukturalnie.",
     "🏀 Trener Koszykówki": "Jesteś analitykiem koszykówki. Skup się na dynamice i technice rzutu.",
@@ -341,7 +402,6 @@ if polecenie:
             placeholder.markdown(widoczny)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
-            # WYZWALACZE MULTIMEDIALNE ORAZ PLIKÓW
             if "GENERATE_IMAGE:" in full_response:
                 st.image(f"https://image.pollinations.ai/prompt/{urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())}?width=1024&height=1024&nologo=true&enhance=true", caption="🖼️ Projekt Graficzny HD")
             if "GENERATE_VIDEO:" in full_response:
