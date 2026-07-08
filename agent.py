@@ -165,9 +165,9 @@ def bezpieczne_wyszukiwanie(zapytanie):
                 wynik += "FAKTY Z INTERNETU:\n"
                 for snip in snippets[:3]:
                     wynik += f"- {re.sub(r'<[^>]+>', '', snip).strip()}\n"
-        except: pass
+    except: pass
+    
     return wynik if wynik else "Brak dostępu do sieci."
-
 # ==========================================
 # 5. PANEL ADMINISTRATORA I PANEL BOCZNY
 # ==========================================
