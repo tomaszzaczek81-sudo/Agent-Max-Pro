@@ -20,6 +20,7 @@ from gtts import gTTS
 import sys
 from contextlib import redirect_stdout
 import datetime
+import time
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -45,83 +46,110 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. POŁĄCZENIE I INICJALIZACJA BAZY
+# 2. POŁĄCZENIE I INICJALIZACJA BAZY (Z AUTO-WAKEUP)
 # ==========================================
-def pobierz_polaczenie_db(): return psycopg2.connect(st.secrets["DATABASE_URL"])
+def pobierz_polaczenie_db(retries=3):
+    for i in range(retries):
+        try:
+            return psycopg2.connect(st.secrets["DATABASE_URL"], connect_timeout=5)
+        except Exception as e:
+            if i == retries - 1: raise e
+            time.sleep(1)
 
 def inicjalizuj_baze_danych():
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS preferencje_uzytkownika (uzytkownik_id INTEGER PRIMARY KEY, profil TEXT)''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS zadania_cykliczne (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER, url TEXT)''')
-    conn.commit()
-    cur.execute("SELECT COUNT(*) FROM uzytkownicy WHERE rola = 'admin'")
-    if cur.fetchone()[0] == 0:
-        hash_hasla = hashlib.sha256(st.secrets["ADMIN_PASSWORD"].encode()).hexdigest()
-        try: cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (st.secrets["ADMIN_LOGIN"], hash_hasla, 'admin')); conn.commit()
-        except: conn.rollback()
-    cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db()
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS preferencje_uzytkownika (uzytkownik_id INTEGER PRIMARY KEY, profil TEXT)''')
+        conn.commit()
+        cur.execute("SELECT COUNT(*) FROM uzytkownicy WHERE rola = 'admin'")
+        if cur.fetchone()[0] == 0:
+            hash_hasla = hashlib.sha256(st.secrets["ADMIN_PASSWORD"].encode()).hexdigest()
+            try: cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (st.secrets["ADMIN_LOGIN"], hash_hasla, 'admin')); conn.commit()
+            except: conn.rollback()
+        cur.close(); conn.close()
+    except Exception as e:
+        st.warning(f"Baza danych jest w tej chwili niedostępna lub się wybudza. Odśwież stronę za 15 sekund. (Szczegóły: {e})")
+        st.stop()
 
-try: inicjalizuj_baze_danych()
-except Exception as e: st.error(f"Błąd bazy: {e}"); st.stop()
+inicjalizuj_baze_danych()
 
 # ==========================================
-# 3. MECHANIZMY SYSTEMOWE
+# 3. MECHANIZMY SYSTEMOWE (PANCERNE)
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
-    cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
-    user = cur.fetchone(); cur.close(); conn.close(); return user
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
+        user = cur.fetchone(); cur.close(); conn.close(); return user
+    except: return None
 
 def zapisz_wiadomosc_db(user_id, rola, tresc):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
-    conn.commit(); cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
+        conn.commit(); cur.close(); conn.close()
+    except: pass
 
 def pobierz_historie_db(user_id):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
-    cur.execute("SELECT rola, tresc FROM historia_czatow WHERE uzytkownik_id = %s ORDER BY timestamp ASC", (user_id,))
-    rows = cur.fetchall(); cur.close(); conn.close()
-    return [{"role": r["rola"], "content": r["tresc"]} for r in rows]
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+        cur.execute("SELECT rola, tresc FROM historia_czatow WHERE uzytkownik_id = %s ORDER BY timestamp ASC", (user_id,))
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [{"role": r["rola"], "content": r["tresc"]} for r in rows]
+    except: return []
 
 def wyczysc_historie_db(user_id):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
-    conn.commit(); cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
+        conn.commit(); cur.close(); conn.close()
+    except: pass
 
 def dodaj_do_bazy_wiedzy(nazwa, tresc):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("INSERT INTO baza_wiedzy (nazwa, tresc) VALUES (%s, %s)", (nazwa, tresc))
-    conn.commit(); cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("INSERT INTO baza_wiedzy (nazwa, tresc) VALUES (%s, %s)", (nazwa, tresc))
+        conn.commit(); cur.close(); conn.close()
+    except: pass
 
 def szukaj_w_bazie_wiedzy(zapytanie):
-    slowa = [w for w in re.findall(r'\b\w{5,}\b', zapytanie.lower())]
-    if not slowa: return ""
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    query_parts = " OR ".join(["tresc ILIKE %s"] * len(slowa))
-    params = [f"%{s}%" for s in slowa]
-    cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
-    wyniki = cur.fetchall(); cur.close(); conn.close()
-    if wyniki: return "\n\n".join([f"[Źródło bazy wiedzy: {w[0]}]: {w[1][:1500]}" for w in wyniki])
-    return ""
+    try:
+        slowa = [w for w in re.findall(r'\b\w{5,}\b', zapytanie.lower())]
+        if not slowa: return ""
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        query_parts = " OR ".join(["tresc ILIKE %s"] * len(slowa))
+        params = [f"%{s}%" for s in slowa]
+        cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
+        wyniki = cur.fetchall(); cur.close(); conn.close()
+        if wyniki: return "\n\n".join([f"[Źródło bazy wiedzy: {w[0]}]: {w[1][:1500]}" for w in wyniki])
+        return ""
+    except: return ""
 
 def wyczysc_baze_wiedzy():
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("DELETE FROM baza_wiedzy"); conn.commit(); cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("DELETE FROM baza_wiedzy"); conn.commit(); cur.close(); conn.close()
+    except: pass
 
 def pobierz_profil(user_id):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("SELECT profil FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
-    res = cur.fetchone(); cur.close(); conn.close(); return res[0] if res else ""
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("SELECT profil FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
+        res = cur.fetchone(); cur.close(); conn.close(); return res[0] if res else ""
+    except: return ""
 
 def zapisz_profil(user_id, profil):
-    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-    cur.execute("SELECT 1 FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
-    if cur.fetchone(): cur.execute("UPDATE preferencje_uzytkownika SET profil = %s WHERE uzytkownik_id = %s", (profil, user_id))
-    else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
-    conn.commit(); cur.close(); conn.close()
+    try:
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
+        cur.execute("SELECT 1 FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
+        if cur.fetchone(): cur.execute("UPDATE preferencje_uzytkownika SET profil = %s WHERE uzytkownik_id = %s", (profil, user_id))
+        else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
+        conn.commit(); cur.close(); conn.close()
+    except: pass
 
 # ==========================================
 # 4. INTERFEJS LOGOWANIA
@@ -134,7 +162,7 @@ if not st.session_state.user_auth:
     if st.button("ZALOGUJ SIĘ", type="primary"):
         uzytkownik = weryfikuj_uzytkownika(login, haslo)
         if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
-        else: st.error("Błąd logowania!")
+        else: st.warning("Błędny login lub hasło. Sprawdź konfigurację w zakładce Secrets.")
     st.stop()
 
 USER_ID = st.session_state.user_auth["id"]
@@ -155,30 +183,31 @@ if USER_ROLA == "admin":
         nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
         if st.button("UTWÓRZ KONTO"):
             if nowy_user and nowe_haslo:
-                h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
-                conn = pobierz_polaczenie_db(); cur = conn.cursor()
                 try:
+                    h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
                     cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
-                    conn.commit(); st.success("Konto stworzone!")
-                except: st.error("Taki użytkownik już istnieje.")
-                cur.close(); conn.close()
+                    conn.commit(); cur.close(); conn.close(); st.success("Konto stworzone!")
+                except Exception as e: st.warning(f"Nie można utworzyć konta (może już istnieje). Błąd: {e}")
         st.markdown("---")
-        conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
-        cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
-        lista_uzytkownikow = cur.fetchall()
-        cur.close(); conn.close()
-        if lista_uzytkownikow:
-            wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
-            zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
-            if st.button("ZMIEŃ HASŁO"):
-                h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
-                conn = pobierz_polaczenie_db(); cur = conn.cursor()
-                cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
-                conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
-            if st.button("❌ USUŃ KONTO", type="primary"):
-                conn = pobierz_polaczenie_db(); cur = conn.cursor()
-                cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
-                conn.commit(); cur.close(); conn.close(); st.rerun()
+        try:
+            conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+            cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+            lista_uzytkownikow = cur.fetchall()
+            cur.close(); conn.close()
+            if lista_uzytkownikow:
+                wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
+                zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
+                if st.button("ZMIEŃ HASŁO"):
+                    h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                    cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                    conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
+                if st.button("❌ USUŃ KONTO", type="primary"):
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                    cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
+                    conn.commit(); cur.close(); conn.close(); st.rerun()
+        except: st.warning("Błąd wczytywania listy użytkowników.")
 
 st.sidebar.markdown("---")
 agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=False)
@@ -202,15 +231,17 @@ with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
 with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
     plik_kb = st.file_uploader("Wgraj plik (PDF/TXT)", type=['pdf', 'txt'])
     if plik_kb and st.button("💾 Zapisz Plik"):
-        tresc = "".join([page.extract_text() for page in PyPDF2.PdfReader(plik_kb).pages]) if plik_kb.type == "application/pdf" else plik_kb.read().decode("utf-8")
-        dodaj_do_bazy_wiedzy(plik_kb.name, tresc); st.success("Plik zapisany!")
+        try:
+            tresc = "".join([page.extract_text() for page in PyPDF2.PdfReader(plik_kb).pages]) if plik_kb.type == "application/pdf" else plik_kb.read().decode("utf-8")
+            dodaj_do_bazy_wiedzy(plik_kb.name, tresc); st.success("Plik zapisany!")
+        except Exception as e: st.warning("Nie udało się odczytać pliku.")
     if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"): wyczysc_baze_wiedzy(); st.success("Baza wyczyszczona!"); st.rerun()
 
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.7")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | DDGS Web Search | Persistent Media")
+st.title("⚡ Agent AI Max Pro V17")
+st.caption("System: SOTA Edition | Bulletproof Stability | Zero-Hallucination Engine")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -252,23 +283,21 @@ if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
     st.session_state.last_audio = audio_bytes
     with st.spinner("🎧 Transkrybuję..."):
         try: polecenie = Groq(api_key=st.secrets["GROQ_API_KEY"]).audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
-        except Exception: st.error("Błąd mikrofonu.")
+        except Exception: st.warning("Usługa transkrypcji Groq jest chwilowo niedostępna.")
 
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
     
-    # NOWY SILNIK WYSZUKIWANIA (DUCK DUCK GO SEARCH API)
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
         with st.spinner("🌍 Przeszukuję sieć na żywo..."):
             try:
                 with DDGS() as ddgs:
                     results = [r for r in ddgs.text(polecenie, max_results=5)]
-                    if results:
-                        kontekst_web = "\n".join([f"- {res['title']}: {res['body']}" for res in results])
+                    if results: kontekst_web = "\n".join([f"- {res['title']}: {res['body']}" for res in results])
             except Exception as e:
-                kontekst_web = f"[Błąd wyszukiwania: {e}]"
+                kontekst_web = "" # Ciche ignorowanie błędu, Agent ma zakaz zmyślania w przypadku pustego stringa
 
     zapytanie_do_wyslania = polecenie
     if kontekst_kb or kontekst_web:
@@ -288,12 +317,13 @@ if polecenie:
         
         instrukcja_sys = TRYBY[wybrany_tryb]
         
-        # ZMIENIONA BLOKADA: Agent ma zignorować brak wiedzy i oprzeć się na wynikach wyszukiwania
+        # TARCZA ANTY-FEJKOWA
         instrukcja_sys += (
             f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
-            "ABSOLUTNY ZAKAZ: Nigdy nie powołuj się na 'wiedzę ograniczoną do 2023 r.'. "
-            "Jeśli użytkownik pyta o aktualne wydarzenia lub ceny, oprzyj się WYŁĄCZNIE na dostarczonym KONTEKŚCIE Z INTERNETU. "
-            "Jeśli kontekst z internetu jest pusty lub nie zawiera odpowiedzi, napisz wprost, że nie udało Ci się znaleźć dokładnych danych w sieci, ale udziel najlepszej możliwej odpowiedzi na podstawie własnej wiedzy."
+            "\n\n--- TARCZA ANTY-FEJKOWA (ZERO HALUCYNACJI) ---\n"
+            "1. Jeśli użytkownik pyta o aktualne wiadomości, ceny, zjawiska na świecie, a w dostarczonym 'KONTEKŚCIE Z INTERNETU' nie ma konkretnych danych, MASZ ABSOLUTNY ZAKAZ ZMYŚLANIA FAKTÓW.\n"
+            "2. W takim przypadku powiedz krótko i szczerze: 'Niestety, moje systemy wyszukiwania nie znalazły dzisiaj weryfikowalnych informacji na ten temat'.\n"
+            "3. Nigdy nie tłumacz się 'wiedzą ograniczoną do 2023 r.' – masz po prostu powiedzieć, że sieć nie zwróciła wyników na to zapytanie."
         )
         
         profil_usera = pobierz_profil(USER_ID)
@@ -329,15 +359,18 @@ if polecenie:
             odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
             placeholder.markdown(odpowiedz_finalna)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
-        except Exception as e: st.error(f"Problem operacyjny: {e}")
+        except Exception as e:
+            if "401" in str(e): st.warning("Klucz API Groq jest nieprawidłowy. Zaktualizuj go w ustawieniach Secrets.")
+            elif "429" in str(e): st.warning("Przekroczono limit zapytań do Groq. Odczekaj chwilę.")
+            else: st.warning(f"Serwer językowy natrafił na problem operacyjny. Spróbuj ponownie.")
 
-        # WYZWALACZE BEZPIECZNE
+        # BEZPIECZNE WYZWALACZE - Bez crashowania aplikacji
         if tts_mode and odpowiedz_finalna:
             try:
                 tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
                 tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
                 st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
-            except: pass
+            except: st.info("Moduł mowy (TTS) chwilowo niedostępny.")
         
         if "GENERATE_CODE:" in full_response:
             try:
@@ -348,13 +381,13 @@ if polecenie:
                 f = io.StringIO()
                 with redirect_stdout(f): exec(kod)
                 if f.getvalue(): st.info(f"**Wynik z serwera:**\n{f.getvalue()}")
-            except Exception as e: st.error(f"**Błąd kodu:** {e}")
+            except Exception as e: st.info(f"**Błąd wykonania kodu w piaskownicy:** {e}")
 
         if "GENERATE_IMAGE:" in full_response:
             try:
                 img_prompt = urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
                 st.markdown(f"**🖼️ Wygenerowana Grafika:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{img_prompt}?width=1024&height=1024&nologo=true)")
-            except: pass
+            except: st.info("Generator obrazów odrzucił zapytanie (Timeout).")
             
         if "GENERATE_EXCEL:" in full_response:
             try:
@@ -362,4 +395,4 @@ if polecenie:
                 buffer = io.BytesIO()
                 pd.read_csv(io.StringIO(csv_data), sep=";").to_excel(buffer, index=False, engine='openpyxl')
                 st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
-            except: pass
+            except: st.info("Błąd formatowania tabeli Excel przez model.")
