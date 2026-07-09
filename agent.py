@@ -15,11 +15,11 @@ from groq import Groq
 from audio_recorder_streamlit import audio_recorder
 import requests
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS
 from gtts import gTTS
 import sys
 from contextlib import redirect_stdout
 import datetime
-import xml.etree.ElementTree as ET
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -209,8 +209,8 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V16.6")
-st.caption("System: SOTA Edition | Swarm | Code Interpreter | RSS News | Fixed")
+st.title("⚡ Agent AI Max Pro V16.7")
+st.caption("System: SOTA Edition | Swarm | Code Interpreter | DDGS Web Search | Persistent Media")
 
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 with st.sidebar:
@@ -258,18 +258,18 @@ if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
     
-    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości"]
+    # NOWY SILNIK WYSZUKIWANIA (DUCK DUCK GO SEARCH API)
+    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Pobieram najnowsze nagłówki z sieci..."):
+        with st.spinner("🌍 Przeszukuję sieć na żywo..."):
             try:
-                url = f"https://news.google.com/rss/search?q={urllib.parse.quote(polecenie)}&hl=pl&gl=PL&ceid=PL:pl"
-                res = requests.get(url, timeout=5)
-                root = ET.fromstring(res.content)
-                items = root.findall('.//item/title')
-                if items: kontekst_web = "\n".join([f"- {item.text}" for item in items[:6]])
-            except: pass
+                with DDGS() as ddgs:
+                    results = [r for r in ddgs.text(polecenie, max_results=5)]
+                    if results:
+                        kontekst_web = "\n".join([f"- {res['title']}: {res['body']}" for res in results])
+            except Exception as e:
+                kontekst_web = f"[Błąd wyszukiwania: {e}]"
 
-    # USUNIĘTY BŁĘDNY OPERATOR MORSA
     zapytanie_do_wyslania = polecenie
     if kontekst_kb or kontekst_web:
         zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
@@ -288,11 +288,12 @@ if polecenie:
         
         instrukcja_sys = TRYBY[wybrany_tryb]
         
-        # WZMOCNIONA BLOKADA HALUCYNACJI DATY
+        # ZMIENIONA BLOKADA: Agent ma zignorować brak wiedzy i oprzeć się na wynikach wyszukiwania
         instrukcja_sys += (
             f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
-            "ABSOLUTNY ZAKAZ: Nigdy nie powołuj się na 'wiedzę ograniczoną do 2023 r.' lub podobne wymówki. "
-            "Jeśli nie masz informacji z sieci o dzisiejszym dniu, napisz po prostu: 'Brak nowych informacji w sieci na ten temat'."
+            "ABSOLUTNY ZAKAZ: Nigdy nie powołuj się na 'wiedzę ograniczoną do 2023 r.'. "
+            "Jeśli użytkownik pyta o aktualne wydarzenia lub ceny, oprzyj się WYŁĄCZNIE na dostarczonym KONTEKŚCIE Z INTERNETU. "
+            "Jeśli kontekst z internetu jest pusty lub nie zawiera odpowiedzi, napisz wprost, że nie udało Ci się znaleźć dokładnych danych w sieci, ale udziel najlepszej możliwej odpowiedzi na podstawie własnej wiedzy."
         )
         
         profil_usera = pobierz_profil(USER_ID)
@@ -330,7 +331,7 @@ if polecenie:
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
         except Exception as e: st.error(f"Problem operacyjny: {e}")
 
-        # WYZWALACZE BEZPIECZNE (DLA BIEŻĄCEJ WIADOMOŚCI)
+        # WYZWALACZE BEZPIECZNE
         if tts_mode and odpowiedz_finalna:
             try:
                 tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
