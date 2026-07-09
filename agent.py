@@ -47,22 +47,15 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BEZPIECZNE RENDEROWANIE (NOWOŚĆ V20)
+# 2. BEZPIECZNE RENDEROWANIE
 # ==========================================
 def bezpieczny_tekst(tekst):
     tekst_bez_wyzwalaczy = re.split(r'GENERATE_', tekst)[0].strip()
-    
-    # Jeśli agent wciąż pisze myśli (brak zamknięcia tagu)
     if "<mysli>" in tekst_bez_wyzwalaczy and "</mysli>" not in tekst_bez_wyzwalaczy:
         return "🧠 *Agent głęboko analizuje logikę...* ▌"
-        
-    # Usuń zamknięte myśli
     oczyszczony = re.sub(r'<mysli>.*?</mysli>', '', tekst_bez_wyzwalaczy, flags=re.DOTALL).strip()
-    
-    # KULOODPORNOŚĆ: Jeśli po usunięciu myśli nic nie zostało, pokaż surowy tekst!
     if not oczyszczony and tekst_bez_wyzwalaczy:
         return tekst_bez_wyzwalaczy.replace("<mysli>", "🧠 **Moje wewnętrzne przemyślenia:**\n\n").replace("</mysli>", "\n\n---\n")
-        
     return oczyszczony
 
 # ==========================================
@@ -104,7 +97,7 @@ def zapisz_wiadomosc_db(user_id, rola, tresc):
         conn = pobierz_polaczenie_db(); cur = conn.cursor()
         cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
         conn.commit(); cur.close(); conn.close()
-    except Exception as e: print(f"Błąd zapisu historii: {e}")
+    except: pass
 
 def pobierz_historie_db(user_id):
     try:
@@ -188,36 +181,25 @@ agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=Fals
 tts_mode = st.sidebar.toggle("🔊 Lektor (Odpowiedzi Głosowe)", value=False)
 
 TRYBY = {
-    "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "🌐 Konsylium (Swarm Mode)": "Jesteś zarządcą roju ekspertów (Swarm). Twoja odpowiedź MUSI być symulacją dyskusji ekspertów.",
+    "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI.",
+    "🌐 Konsylium (Swarm Mode)": "Jesteś zarządcą roju ekspertów (Swarm).",
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP.",
     "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn.",
     "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej."
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
 
-st.sidebar.markdown("---")
-with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
-    nowy_profil = st.text_area("Twój profil:", value=pobierz_profil(USER_ID), height=150)
-    if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Zapisano!")
-
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V20")
-st.caption("System: Bulletproof Render | Cleaned Engine | Zero Silent Failures")
+st.title("⚡ Agent AI Max Pro V21")
+st.caption("System: Zero-Excuses Engine | Forced Web Awareness | Anti-2023 Shield")
 
 if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 
 with st.sidebar:
     st.markdown("---")
-    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
-    if zdjecie: 
-        st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
-        st.success("Obraz wgrany!")
-    else: st.session_state.img_memory = None
-
     if st.button("🧹 Resetuj rozmowę"): 
         wyczysc_historie_db(USER_ID); st.session_state.python_env = {}; st.rerun()
 
@@ -225,27 +207,20 @@ historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
     if msg["role"] == "user" and "KONTEKST SYSTEMOWY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
-        raw_text = str(msg["content"])
-        widoczny = bezpieczny_tekst(raw_text)
+        widoczny = bezpieczny_tekst(str(msg["content"]))
         if widoczny: st.markdown(widoczny.replace(" ▌", ""))
 
-col_mic, col_input = st.columns([1, 10])
-with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Wpisz zapytanie...")
+polecenie = st.chat_input("Wpisz zapytanie...")
 
 if polecenie:
-    kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
         with st.spinner("🌍 Przeszukuję sieć na żywo..."): kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
-    if kontekst_kb or kontekst_web:
-        zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
-        if kontekst_kb: zapytanie_do_wyslania += f"--- BAZA WIEDZY ---\n{kontekst_kb}\n"
-        if kontekst_web: zapytanie_do_wyslania += f"--- INTERNET ---\n{kontekst_web}\n"
-        zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
+    if kontekst_web:
+        zapytanie_do_wyslania = f"KONTEKST SYSTEMOWY:\n--- INTERNET ---\n{kontekst_web}\n\nPYTANIE UŻYTKOWNIKA: {polecenie}"
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
     with st.chat_message("user"): st.markdown(polecenie)
@@ -255,27 +230,20 @@ if polecenie:
         full_response = ""
         
         instrukcja_sys = TRYBY[wybrany_tryb]
-        instrukcja_sys += f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Rok 2026."
         
-        profil_usera = pobierz_profil(USER_ID)
-        if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
-        if agentic_mode: instrukcja_sys += "\n\nUWAGA: Musisz otworzyć tag <mysli> i przeprowadzić logikę. Na koniec ZAMKNIJ TAG i napisz finalną odpowiedź poza nim!"
+        # TARCZA V21 - TOTALNY ZAKAZ WYMÓWEK
+        instrukcja_sys += (
+            f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Mamy rok 2026. JESTEŚ ZAAWANSOWANYM SYSTEMEM Z DOSTĘPEM DO INTERNETU poprzez zintegrowane skrypty.\n"
+            "ABSOLUTNY ZAKAZ: Nigdy, pod żadnym pozorem nie używaj formułek typu 'jako agent AI nie mam dostępu do internetu', 'nie mogę sprawdzić dzisiejszych wiadomości' ani 'moje dane kończą się w 2023 roku'. "
+            "Jeśli nie dostałeś w KONTEKŚCIE danych na konkretne pytanie (np. lokalne ceny paliw), powiedz to rzeczowo: 'Niestety, moje skrypty wyszukujące nie znalazły w tej sekundzie precyzyjnych danych dla Twojego zapytania'. Następnie odpowiedz bazując na swojej wiedzy eksperckiej (bez zmyślania dzisiejszych statystyk). NIGDY nie zrzucaj winy na bycie sztuczną inteligencją."
+        )
         
-        instrukcja_sys += "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\nZDJĘCIE -> GENERATE_IMAGE: [prompt]\nEXCEL -> GENERATE_EXCEL: [dane CSV]\nKOD -> GENERATE_CODE: [kod Python]"
-        
-        # Zabezpieczenie przed błędem struktury zapytań Llama 3
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
-        
-        if st.session_state.img_memory: 
-            api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
-        else: 
-            api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
+        api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            wybrany_model = "llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile"
-            
-            stream = client.chat.completions.create(model=wybrany_model, messages=api_messages, stream=True)
+            stream = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=api_messages, stream=True)
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
@@ -286,16 +254,4 @@ if polecenie:
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
         except Exception as e:
-            st.error("❌ KRYTYCZNY BŁĄD API GROQ ❌")
-            st.error(f"Treść: {e}")
-
-        if "GENERATE_CODE:" in full_response:
-            try:
-                kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
-                kod = re.sub(r'```python|```', '', kod).strip()
-                st.markdown("**💻 Interpreter Pythona:**")
-                st.code(kod, language="python")
-                f = io.StringIO()
-                with redirect_stdout(f): exec(kod, st.session_state.python_env)
-                if f.getvalue(): st.info(f"Wynik:\n{f.getvalue()}")
-            except Exception as e: st.error(f"❌ Błąd skryptu: {e}")
+            st.error(f"❌ KRYTYCZNY BŁĄD API: {e}")
