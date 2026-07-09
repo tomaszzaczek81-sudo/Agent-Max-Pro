@@ -47,7 +47,7 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BEZPIECZNE RENDEROWANIE ZNACZNIKÓW
+# 2. BEZPIECZNE RENDEROWANIE
 # ==========================================
 def bezpieczny_tekst(tekst):
     tekst_bez_wyzwalaczy = re.split(r'GENERATE_', tekst)[0].strip()
@@ -59,7 +59,7 @@ def bezpieczny_tekst(tekst):
     return oczyszczony
 
 # ==========================================
-# 3. POŁĄCZENIE I INICJALIZACJA BAZY
+# 3. BAZA DANYCH
 # ==========================================
 def pobierz_polaczenie_db(retries=3):
     for i in range(retries):
@@ -83,7 +83,7 @@ def inicjalizuj_baze_danych():
             except: conn.rollback()
         cur.close(); conn.close()
     except Exception as e:
-        st.error(f"❌ BŁĄD BAZY DANYCH. Szczegóły: {e}"); st.stop()
+        st.error(f"❌ BŁĄD BAZY DANYCH: {e}"); st.stop()
 
 inicjalizuj_baze_danych()
 
@@ -112,19 +112,6 @@ def wyczysc_historie_db(user_id):
     cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
     conn.commit(); cur.close(); conn.close()
 
-def szukaj_w_bazie_wiedzy(zapytanie):
-    try:
-        slowa = [w for w in re.findall(r'\b\w{5,}\b', zapytanie.lower())]
-        if not slowa: return ""
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        query_parts = " OR ".join(["tresc ILIKE %s"] * len(slowa))
-        params = [f"%{s}%" for s in slowa]
-        cur.execute(f"SELECT nazwa, tresc FROM baza_wiedzy WHERE {query_parts} LIMIT 2", params)
-        wyniki = cur.fetchall(); cur.close(); conn.close()
-        if wyniki: return "\n\n".join([f"[Źródło bazy wiedzy: {w[0]}]: {w[1][:1500]}" for w in wyniki])
-        return ""
-    except: return ""
-
 def pobierz_profil(user_id):
     try:
         conn = pobierz_polaczenie_db(); cur = conn.cursor()
@@ -139,37 +126,20 @@ def zapisz_profil(user_id, profil):
     else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
     conn.commit(); cur.close(); conn.close()
 
-# ==========================================
-# 4. POTĘŻNY HYBRYDOWY SILNIK WYSZUKIWANIA
-# ==========================================
 def stabilne_wyszukiwanie(zapytanie):
     wyniki = ""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
-
-    # MODUŁ POGODOWY (Niezawodny API wttr.in)
+    headers = {"User-Agent": "Mozilla/5.0"}
     if "pogod" in zapytanie.lower():
         try:
-            miasto = "Wejherowo" # Domyślnie na podstawie Twojej lokalizacji
+            miasto = "Wejherowo"
             slowa = zapytanie.lower().split()
             if "w" in slowa:
                 idx = slowa.index("w")
                 if idx + 1 < len(slowa): miasto = slowa[idx+1]
             res_w = requests.get(f"https://wttr.in/{urllib.parse.quote(miasto)}?format=%l:+%C,+%t,+wiatr:+%w&M", timeout=4)
-            if res_w.status_code == 200:
-                wyniki += f"\n--- DANE POGODOWE ---\n{res_w.text}\n"
+            if res_w.status_code == 200: wyniki += f"\n--- DANE POGODOWE ---\n{res_w.text}\n"
         except: pass
 
-    # MODUŁ FAKTÓW (Skrapowanie HTML z DuckDuckGo)
-    try:
-        res_ddg = requests.get(f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(zapytanie)}", headers=headers, timeout=5)
-        soup = BeautifulSoup(res_ddg.text, 'html.parser')
-        snippets = soup.find_all('a', class_='result__snippet')
-        if snippets:
-            wyniki += "\n--- WYNIKI WYSZUKIWANIA Z INTERNETU ---\n"
-            wyniki += "\n".join([f"- {s.text}" for s in snippets[:4]]) + "\n"
-    except: pass
-
-    # MODUŁ WIADOMOŚCI (Google News RSS)
     try:
         url_news = f"https://news.google.com/rss/search?q={urllib.parse.quote(zapytanie)}&hl=pl&gl=PL&ceid=PL:pl"
         res_news = requests.get(url_news, timeout=5)
@@ -179,11 +149,10 @@ def stabilne_wyszukiwanie(zapytanie):
             wyniki += "\n--- BAZA AKTUALNOŚCI Z DZISIAJ ---\n"
             wyniki += "\n".join([f"- {item.text}" for item in items[:4]]) + "\n"
     except: pass
-
     return wyniki
 
 # ==========================================
-# 5. INTERFEJS LOGOWANIA
+# 4. INTERFEJS LOGOWANIA
 # ==========================================
 if "user_auth" not in st.session_state: st.session_state.user_auth = None
 if not st.session_state.user_auth:
@@ -201,14 +170,49 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 6. PANEL BOCZNY 
+# 5. PANEL BOCZNY (PRZYWRÓCONY ADMIN)
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
+# --- TUTAJ WRACA PANEL ADMINISTRATORA ---
+if USER_ROLA == "admin":
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
+        nowy_user = st.text_input("Nowy login", key="n_user")
+        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
+        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
+        if st.button("UTWÓRZ KONTO"):
+            if nowy_user and nowe_haslo:
+                try:
+                    h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
+                    conn.commit(); cur.close(); conn.close(); st.success("Konto stworzone!")
+                except Exception as e: st.warning(f"Nie można utworzyć konta. Błąd: {e}")
+        st.markdown("---")
+        try:
+            conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+            cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
+            lista_uzytkownikow = cur.fetchall()
+            cur.close(); conn.close()
+            if lista_uzytkownikow:
+                wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
+                zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
+                if st.button("ZMIEŃ HASŁO"):
+                    h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                    cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
+                    conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
+                if st.button("❌ USUŃ KONTO", type="primary"):
+                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+                    cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
+                    conn.commit(); cur.close(); conn.close(); st.rerun()
+        except: st.warning("Błąd wczytywania listy użytkowników.")
+# ----------------------------------------
+
 st.sidebar.markdown("---")
 agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=False)
-tts_mode = st.sidebar.toggle("🔊 Lektor (Odpowiedzi Głosowe)", value=False)
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI.",
@@ -225,10 +229,9 @@ with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
     if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Zapisano!")
 
 # ==========================================
-# 7. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
+# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V22")
-st.caption("System: Ultimate Hybrid Search | Weather Module | Unrestricted Core")
+st.title("⚡ Agent AI Max Pro")
 
 if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
@@ -256,7 +259,7 @@ if polecenie:
     kontekst_web = ""
     slowa_wyszukiwania = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny", "pogoda", "pogodę"]
     if any(s in polecenie.lower() for s in slowa_wyszukiwania):
-        with st.spinner("🌍 Przeszukuję sieć na żywo (Pogoda + Internet + Wiadomości)..."): 
+        with st.spinner("🌍 Przeszukuję sieć na żywo..."): 
             kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
@@ -273,7 +276,7 @@ if polecenie:
         instrukcja_sys = TRYBY[wybrany_tryb]
         instrukcja_sys += (
             f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Mamy rok 2026.\n"
-            "Odpowiadaj ZAWSZE rzeczowo, wykorzystując DANE POBRANE Z SIECI. NIGDY nie wymyślaj wymówek, że nie masz dostępu do internetu (bo te dane właśnie dostałeś)."
+            "Odpowiadaj ZAWSZE rzeczowo, wykorzystując DANE POBRANE Z SIECI. NIGDY nie wymyślaj wymówek, że nie masz dostępu do internetu."
         )
         
         profil_usera = pobierz_profil(USER_ID)
