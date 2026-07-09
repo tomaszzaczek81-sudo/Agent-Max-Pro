@@ -20,6 +20,7 @@ import sys
 from contextlib import redirect_stdout
 import datetime
 import time
+import traceback
 import xml.etree.ElementTree as ET
 
 # ==========================================
@@ -72,27 +73,25 @@ def inicjalizuj_baze_danych():
             except: conn.rollback()
         cur.close(); conn.close()
     except Exception as e:
-        st.error(f"Błąd krytyczny: Brak połączenia z bazą danych Neon. Sprawdź poprawność DATABASE_URL w Secrets. Szczegóły: {e}")
+        st.error(f"❌ BŁĄD BAZY DANYCH: Nie można połączyć się z Neon. Sprawdź hasło w Secrets. Szczegóły: {e}")
         st.stop()
 
 inicjalizuj_baze_danych()
 
 # ==========================================
-# 3. MECHANIZMY SYSTEMOWE (PANCERNE)
+# 3. MECHANIZMY SYSTEMOWE 
 # ==========================================
 def weryfikuj_uzytkownika(login, haslo):
-    try:
-        conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
-        cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
-        user = cur.fetchone(); cur.close(); conn.close(); return user
-    except: return None
+    conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
+    cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
+    user = cur.fetchone(); cur.close(); conn.close(); return user
 
 def zapisz_wiadomosc_db(user_id, rola, tresc):
     try:
         conn = pobierz_polaczenie_db(); cur = conn.cursor()
         cur.execute("INSERT INTO historia_czatow (uzytkownik_id, rola, tresc) VALUES (%s, %s, %s)", (user_id, rola, tresc))
         conn.commit(); cur.close(); conn.close()
-    except: pass
+    except Exception as e: print(f"Błąd zapisu historii: {e}")
 
 def pobierz_historie_db(user_id):
     try:
@@ -103,18 +102,9 @@ def pobierz_historie_db(user_id):
     except: return []
 
 def wyczysc_historie_db(user_id):
-    try:
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
-        conn.commit(); cur.close(); conn.close()
-    except: pass
-
-def dodaj_do_bazy_wiedzy(nazwa, tresc):
-    try:
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        cur.execute("INSERT INTO baza_wiedzy (nazwa, tresc) VALUES (%s, %s)", (nazwa, tresc))
-        conn.commit(); cur.close(); conn.close()
-    except: pass
+    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+    cur.execute("DELETE FROM historia_czatow WHERE uzytkownik_id = %s", (user_id,))
+    conn.commit(); cur.close(); conn.close()
 
 def szukaj_w_bazie_wiedzy(zapytanie):
     try:
@@ -129,12 +119,6 @@ def szukaj_w_bazie_wiedzy(zapytanie):
         return ""
     except: return ""
 
-def wyczysc_baze_wiedzy():
-    try:
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        cur.execute("DELETE FROM baza_wiedzy"); conn.commit(); cur.close(); conn.close()
-    except: pass
-
 def pobierz_profil(user_id):
     try:
         conn = pobierz_polaczenie_db(); cur = conn.cursor()
@@ -143,35 +127,23 @@ def pobierz_profil(user_id):
     except: return ""
 
 def zapisz_profil(user_id, profil):
-    try:
-        conn = pobierz_polaczenie_db(); cur = conn.cursor()
-        cur.execute("SELECT 1 FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
-        if cur.fetchone(): cur.execute("UPDATE preferencje_uzytkownika SET profil = %s WHERE uzytkownik_id = %s", (profil, user_id))
-        else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
-        conn.commit(); cur.close(); conn.close()
-    except: pass
+    conn = pobierz_polaczenie_db(); cur = conn.cursor()
+    cur.execute("SELECT 1 FROM preferencje_uzytkownika WHERE uzytkownik_id = %s", (user_id,))
+    if cur.fetchone(): cur.execute("UPDATE preferencje_uzytkownika SET profil = %s WHERE uzytkownik_id = %s", (profil, user_id))
+    else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
+    conn.commit(); cur.close(); conn.close()
 
-# NOWOŚĆ V18: Hybrydowe wyszukiwanie HTTP (Odporne na bany IP w chmurze)
 def stabilne_wyszukiwanie(zapytanie):
     wyniki = ""
     try:
-        url_wiki = f"https://pl.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(zapytanie)}&utf8=&format=json"
-        res_wiki = requests.get(url_wiki, timeout=4).json()
-        if 'query' in res_wiki and res_wiki['query']['search']:
-            wyniki += "--- BAZA FAKTÓW (WIKI) ---\n"
-            for item in res_wiki['query']['search'][:2]:
-                wyniki += f"- {item['title']}: {BeautifulSoup(item['snippet'], 'html.parser').text}\n"
-    except: pass
-    
-    try:
         url_news = f"https://news.google.com/rss/search?q={urllib.parse.quote(zapytanie)}&hl=pl&gl=PL&ceid=PL:pl"
-        res_news = requests.get(url_news, timeout=4)
+        res_news = requests.get(url_news, timeout=5)
         root = ET.fromstring(res_news.content)
         items = root.findall('.//item/title')
         if items:
             wyniki += "\n--- BAZA AKTUALNOŚCI Z DZISIAJ ---\n"
             wyniki += "\n".join([f"- {item.text}" for item in items[:5]]) + "\n"
-    except: pass
+    except Exception as e: print(f"Wyszukiwanie HTTP nie powiodło się: {e}")
     return wyniki
 
 # ==========================================
@@ -183,9 +155,12 @@ if not st.session_state.user_auth:
     login = st.text_input("Login")
     haslo = st.text_input("Hasło", type="password")
     if st.button("ZALOGUJ SIĘ", type="primary"):
-        uzytkownik = weryfikuj_uzytkownika(login, haslo)
-        if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
-        else: st.warning("Błędny login lub hasło. Sprawdź konfigurację w zakładce Secrets.")
+        try:
+            uzytkownik = weryfikuj_uzytkownika(login, haslo)
+            if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
+            else: st.error("❌ Błędny login lub hasło.")
+        except Exception as e:
+            st.error(f"❌ Wystąpił błąd podczas logowania: {e}")
     st.stop()
 
 USER_ID = st.session_state.user_auth["id"]
@@ -198,50 +173,15 @@ USER_ROLA = st.session_state.user_auth["rola"]
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
 
-if USER_ROLA == "admin":
-    st.sidebar.markdown("---")
-    with st.sidebar.expander("🛠️ PANEL ADMINISTRATORA", expanded=False):
-        nowy_user = st.text_input("Nowy login", key="n_user")
-        nowe_haslo = st.text_input("Nowe hasło", type="password", key="n_pass")
-        nowa_rola = st.selectbox("Rola", ["user", "admin"], key="n_role")
-        if st.button("UTWÓRZ KONTO"):
-            if nowy_user and nowe_haslo:
-                try:
-                    h_hash = hashlib.sha256(nowe_haslo.encode()).hexdigest()
-                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-                    cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
-                    conn.commit(); cur.close(); conn.close(); st.success("Konto stworzone!")
-                except Exception as e: st.warning(f"Nie można utworzyć konta. Błąd: {e}")
-        st.markdown("---")
-        try:
-            conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
-            cur.execute("SELECT login FROM uzytkownicy WHERE login != %s", (USER_LOGIN,))
-            lista_uzytkownikow = cur.fetchall()
-            cur.close(); conn.close()
-            if lista_uzytkownikow:
-                wybrany_uzytkownik = st.selectbox("Zarządzaj kontem", [u["login"] for u in lista_uzytkownikow])
-                zmien_haslo = st.text_input("Nowe hasło użytkownika", type="password")
-                if st.button("ZMIEŃ HASŁO"):
-                    h_hash = hashlib.sha256(zmien_haslo.encode()).hexdigest()
-                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-                    cur.execute("UPDATE uzytkownicy SET haslo_hash = %s WHERE login = %s", (h_hash, wybrany_uzytkownik))
-                    conn.commit(); cur.close(); conn.close(); st.success("Hasło zmienione!")
-                if st.button("❌ USUŃ KONTO", type="primary"):
-                    conn = pobierz_polaczenie_db(); cur = conn.cursor()
-                    cur.execute("DELETE FROM uzytkownicy WHERE login = %s", (wybrany_uzytkownik,))
-                    conn.commit(); cur.close(); conn.close(); st.rerun()
-        except: st.warning("Błąd wczytywania listy użytkowników.")
-
 st.sidebar.markdown("---")
 agentic_mode = st.sidebar.toggle("🧠 Agentic Workflow (Myślenie)", value=False)
 tts_mode = st.sidebar.toggle("🔊 Lektor (Odpowiedzi Głosowe)", value=False)
 
 TRYBY = {
     "🧠 Główny Asystent": "Jesteś wszechstronnym Agentem AI. Odpowiadaj profesjonalnie.",
-    "🌐 Konsylium (Swarm Mode)": "Jesteś zarządcą roju ekspertów (Swarm). Twoja odpowiedź MUSI być symulacją dyskusji trzech osób: [Architekt], [Ekspert LinkedIn] i [Kierownik].",
+    "🌐 Konsylium (Swarm Mode)": "Jesteś zarządcą roju ekspertów (Swarm). Twoja odpowiedź MUSI być symulacją dyskusji ekspertów.",
     "💻 Architekt Szyszka & T.Ż": "Jesteś ekspertem Pythona i systemów ERP.",
     "🚀 Ekspert LinkedIn": "Jesteś ekspertem personal brandingu na LinkedIn.",
-    "✍️ Inżynier Promptów": "Jesteś światowej klasy Inżynierem Promptów.",
     "🔧 Mechanik Diagnosta": "Jesteś specjalistą od mechaniki pojazdowej."
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
@@ -251,30 +191,29 @@ with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
     nowy_profil = st.text_area("Twój profil:", value=pobierz_profil(USER_ID), height=150)
     if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Profil zaktualizowany!")
 
-with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
-    plik_kb = st.file_uploader("Wgraj plik (PDF/TXT)", type=['pdf', 'txt'])
-    if plik_kb and st.button("💾 Zapisz Plik"):
-        try:
-            tresc = "".join([page.extract_text() for page in PyPDF2.PdfReader(plik_kb).pages]) if plik_kb.type == "application/pdf" else plik_kb.read().decode("utf-8")
-            dodaj_do_bazy_wiedzy(plik_kb.name, tresc); st.success("Plik zapisany!")
-        except Exception as e: st.warning("Nie udało się odczytać pliku.")
-    if st.button("🗑️ WYCZYŚĆ BAZĘ WIEDZY", type="primary"): wyczysc_baze_wiedzy(); st.success("Baza wyczyszczona!"); st.rerun()
-
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V18")
-st.caption("System: SOTA Edition | Ironclad Engine | Persistent Sandbox | Custom HTTP Search")
+st.title("⚡ Agent AI Max Pro V19 - Tryb Diagnostyczny")
+st.caption("System: SOTA Edition | Verbose Errors | Cleaned Engine")
 
-# Pamięć dla Interpretera Pythona
 if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 
 with st.sidebar:
     st.markdown("---")
-    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
-    if zdjecie: st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8'); st.success("Obraz wgrany!")
-    if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.session_state.python_env = {}; st.rerun()
+    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie (Do usunięcia z pamięci kliknij X)", type=['png', 'jpg', 'jpeg'])
+    if zdjecie: 
+        st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
+        st.success("Obraz wgrany do pamięci podręcznej!")
+    else:
+        st.session_state.img_memory = None
+
+    if st.button("🧹 Resetuj rozmowę i pamięć"): 
+        wyczysc_historie_db(USER_ID)
+        st.session_state.python_env = {}
+        st.session_state.img_memory = None
+        st.rerun()
 
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
@@ -286,30 +225,10 @@ for msg in historia_czatu:
             visible_text = visible_text.split("</mysli>")[1].strip()
         
         if visible_text: st.markdown(visible_text)
-            
-        if "GENERATE_IMAGE:" in raw_text:
-            try:
-                hist_img_prompt = urllib.parse.quote(raw_text.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
-                st.markdown(f"**🖼️ Zapisana Grafika z historii:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{hist_img_prompt}?width=1024&height=1024&nologo=true)")
-            except: pass
-            
-        if "GENERATE_EXCEL:" in raw_text:
-            try:
-                hist_csv_data = raw_text.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
-                h_buffer = io.BytesIO()
-                pd.read_csv(io.StringIO(hist_csv_data), sep=";").to_excel(h_buffer, index=False, engine='openpyxl')
-                st.download_button("📊 Pobierz Archiwalny Excel", data=h_buffer.getvalue(), file_name="Arkusz_Archiwum.xlsx", mime="application/vnd.ms-excel", key=hashlib.mdigest(raw_text.encode()).hexdigest()[:10])
-            except: pass
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Zadaj pytanie, każ napisać kod lub wygeneruj multimedia...")
-
-if audio_bytes and st.session_state.get('last_audio') != audio_bytes:
-    st.session_state.last_audio = audio_bytes
-    with st.spinner("🎧 Transkrybuję..."):
-        try: polecenie = Groq(api_key=st.secrets["GROQ_API_KEY"]).audio.transcriptions.create(file=("audio.wav", audio_bytes), model="whisper-large-v3", response_format="text")
-        except Exception: st.warning("Usługa transkrypcji Groq jest chwilowo niedostępna.")
+with col_input: polecenie = st.chat_input("Wpisz zapytanie testowe...")
 
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
@@ -317,7 +236,7 @@ if polecenie:
     
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Przeszukuję sieć na żywo (Niezawodny protokół HTTP)..."):
+        with st.spinner("🌍 Przeszukuję sieć na żywo..."):
             kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
@@ -339,9 +258,8 @@ if polecenie:
         
         instrukcja_sys += (
             f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
-            "\n\n--- TARCZA ANTY-FEJKOWA ---\n"
-            "Jeśli użytkownik pyta o dzisiejsze wydarzenia lub ceny, oprzyj się TYLKO na sekcji 'AKTUALNE WYNIKI Z INTERNETU'. "
-            "Jeśli nie dostarczono żadnych wyników z sieci, przyznaj to wprost i absolutnie NIE ZMYŚLAJ faktów."
+            "\nJeśli użytkownik pyta o dzisiejsze wydarzenia, oprzyj się TYLKO na sekcji 'AKTUALNE WYNIKI Z INTERNETU'. "
+            "Jeśli nie dostarczono żadnych wyników z sieci, przyznaj to wprost i nie zmyślaj."
         )
         
         profil_usera = pobierz_profil(USER_ID)
@@ -350,21 +268,26 @@ if polecenie:
         
         instrukcja_sys += (
             "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\n"
-            "ZDJĘCIE/GRAFIKA -> dodaj: GENERATE_IMAGE: [prompt angielski]\n"
+            "ZDJĘCIE -> dodaj: GENERATE_IMAGE: [prompt angielski]\n"
             "EXCEL -> dodaj: GENERATE_EXCEL: [dane CSV ze średnikami]\n"
-            "PDF -> dodaj: GENERATE_PDF: [tekst]\n"
-            "KOD/MATEMATYKA -> dodaj: GENERATE_CODE: [czysty kod Python]."
+            "KOD -> dodaj: GENERATE_CODE: [czysty kod Python]."
         )
         
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
-        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu. Zignoruj starą historię, jeśli nie pasuje."})
+        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu."})
         
-        if st.session_state.img_memory: api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
-        else: api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
+        if st.session_state.img_memory: 
+            api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
+        else: 
+            api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            stream = client.chat.completions.create(model="meta-llama/llama-4-scout-17b-16e-instruct" if st.session_state.img_memory else "llama-3.3-70b-versatile", messages=api_messages, stream=True)
+            
+            # WŁAŚCIWY MODEL WIZYJNY GROQ, ZAMIAST ZMYŚLONEGO
+            wybrany_model = "llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile"
+            
+            stream = client.chat.completions.create(model=wybrany_model, messages=api_messages, stream=True)
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
@@ -377,38 +300,20 @@ if polecenie:
             odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
             placeholder.markdown(odpowiedz_finalna)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
+            
         except Exception as e:
-            st.error(f"❌ Problem z dostępem do API Groq. Komunikat z serwera: {e}. Sprawdź zakładkę Secrets.")
+            st.error("❌ KRYTYCZNY BŁĄD SILNIKA GROQ ❌")
+            st.error(f"Treść błędu: {e}")
+            st.error(f"Szczegóły: {traceback.format_exc()}")
 
-        if tts_mode and odpowiedz_finalna:
-            try:
-                tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
-                tts_buffer = io.BytesIO(); tts.write_to_fp(tts_buffer)
-                st.audio(tts_buffer.getvalue(), format="audio/mp3", autoplay=True)
-            except: st.info("Moduł mowy (TTS) chwilowo niedostępny.")
-        
         if "GENERATE_CODE:" in full_response:
             try:
                 kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
                 kod = re.sub(r'```python|```', '', kod).strip()
-                st.markdown("**💻 Interpreter Pythona (Z pamięcią stanu) - Uruchomiony kod:**")
+                st.markdown("**💻 Interpreter Pythona:**")
                 st.code(kod, language="python")
                 f = io.StringIO()
                 with redirect_stdout(f): 
                     exec(kod, st.session_state.python_env)
                 if f.getvalue(): st.info(f"**Wynik z serwera:**\n{f.getvalue()}")
-            except Exception as e: st.error(f"**Błąd składniowy w wygenerowanym kodzie:** {e}")
-
-        if "GENERATE_IMAGE:" in full_response:
-            try:
-                img_prompt = urllib.parse.quote(full_response.split('GENERATE_IMAGE:')[1].split('GENERATE_')[0].strip())
-                st.markdown(f"**🖼️ Wygenerowana Grafika:**\n\n![Zdjecie](https://image.pollinations.ai/prompt/{img_prompt}?width=1024&height=1024&nologo=true)")
-            except: st.info("Generator obrazów odrzucił zapytanie (Timeout).")
-            
-        if "GENERATE_EXCEL:" in full_response:
-            try:
-                csv_data = full_response.split("GENERATE_EXCEL:")[1].split("GENERATE_")[0].strip()
-                buffer = io.BytesIO()
-                pd.read_csv(io.StringIO(csv_data), sep=";").to_excel(buffer, index=False, engine='openpyxl')
-                st.download_button("📊 Pobierz Excel", data=buffer.getvalue(), file_name="Arkusz.xlsx", mime="application/vnd.ms-excel")
-            except: st.info("Błąd formatowania tabeli Excel przez model.")
+            except Exception as e: st.error(f"❌ Błąd w wygenerowanym kodzie: {e}")
