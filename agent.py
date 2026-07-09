@@ -15,12 +15,12 @@ from groq import Groq
 from audio_recorder_streamlit import audio_recorder
 import requests
 from bs4 import BeautifulSoup
-from duckduckgo_search import DDGS
 from gtts import gTTS
 import sys
 from contextlib import redirect_stdout
 import datetime
 import time
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # 1. KONFIGURACJA I APPLE PREMIUM DESIGN (CSS)
@@ -46,7 +46,7 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. POŁĄCZENIE I INICJALIZACJA BAZY (Z AUTO-WAKEUP)
+# 2. POŁĄCZENIE I INICJALIZACJA BAZY
 # ==========================================
 def pobierz_polaczenie_db(retries=3):
     for i in range(retries):
@@ -72,7 +72,7 @@ def inicjalizuj_baze_danych():
             except: conn.rollback()
         cur.close(); conn.close()
     except Exception as e:
-        st.warning(f"Baza danych jest w tej chwili niedostępna lub się wybudza. Odśwież stronę za 15 sekund. (Szczegóły: {e})")
+        st.error(f"Błąd krytyczny: Brak połączenia z bazą danych Neon. Sprawdź poprawność DATABASE_URL w Secrets. Szczegóły: {e}")
         st.stop()
 
 inicjalizuj_baze_danych()
@@ -151,6 +151,29 @@ def zapisz_profil(user_id, profil):
         conn.commit(); cur.close(); conn.close()
     except: pass
 
+# NOWOŚĆ V18: Hybrydowe wyszukiwanie HTTP (Odporne na bany IP w chmurze)
+def stabilne_wyszukiwanie(zapytanie):
+    wyniki = ""
+    try:
+        url_wiki = f"https://pl.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(zapytanie)}&utf8=&format=json"
+        res_wiki = requests.get(url_wiki, timeout=4).json()
+        if 'query' in res_wiki and res_wiki['query']['search']:
+            wyniki += "--- BAZA FAKTÓW (WIKI) ---\n"
+            for item in res_wiki['query']['search'][:2]:
+                wyniki += f"- {item['title']}: {BeautifulSoup(item['snippet'], 'html.parser').text}\n"
+    except: pass
+    
+    try:
+        url_news = f"https://news.google.com/rss/search?q={urllib.parse.quote(zapytanie)}&hl=pl&gl=PL&ceid=PL:pl"
+        res_news = requests.get(url_news, timeout=4)
+        root = ET.fromstring(res_news.content)
+        items = root.findall('.//item/title')
+        if items:
+            wyniki += "\n--- BAZA AKTUALNOŚCI Z DZISIAJ ---\n"
+            wyniki += "\n".join([f"- {item.text}" for item in items[:5]]) + "\n"
+    except: pass
+    return wyniki
+
 # ==========================================
 # 4. INTERFEJS LOGOWANIA
 # ==========================================
@@ -188,7 +211,7 @@ if USER_ROLA == "admin":
                     conn = pobierz_polaczenie_db(); cur = conn.cursor()
                     cur.execute("INSERT INTO uzytkownicy (login, haslo_hash, rola) VALUES (%s, %s, %s)", (nowy_user, h_hash, nowa_rola))
                     conn.commit(); cur.close(); conn.close(); st.success("Konto stworzone!")
-                except Exception as e: st.warning(f"Nie można utworzyć konta (może już istnieje). Błąd: {e}")
+                except Exception as e: st.warning(f"Nie można utworzyć konta. Błąd: {e}")
         st.markdown("---")
         try:
             conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
@@ -240,15 +263,18 @@ with st.sidebar.expander("📚 Wiedza i Zadania w Tle", expanded=False):
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V17")
-st.caption("System: SOTA Edition | Bulletproof Stability | Zero-Hallucination Engine")
+st.title("⚡ Agent AI Max Pro V18")
+st.caption("System: SOTA Edition | Ironclad Engine | Persistent Sandbox | Custom HTTP Search")
 
+# Pamięć dla Interpretera Pythona
+if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
+
 with st.sidebar:
     st.markdown("---")
     zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
     if zdjecie: st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8'); st.success("Obraz wgrany!")
-    if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.rerun()
+    if st.button("🧹 Resetuj rozmowę"): wyczysc_historie_db(USER_ID); st.session_state.python_env = {}; st.rerun()
 
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
@@ -291,13 +317,8 @@ if polecenie:
     
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Przeszukuję sieć na żywo..."):
-            try:
-                with DDGS() as ddgs:
-                    results = [r for r in ddgs.text(polecenie, max_results=5)]
-                    if results: kontekst_web = "\n".join([f"- {res['title']}: {res['body']}" for res in results])
-            except Exception as e:
-                kontekst_web = "" # Ciche ignorowanie błędu, Agent ma zakaz zmyślania w przypadku pustego stringa
+        with st.spinner("🌍 Przeszukuję sieć na żywo (Niezawodny protokół HTTP)..."):
+            kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
     if kontekst_kb or kontekst_web:
@@ -314,16 +335,13 @@ if polecenie:
         full_response = ""
         
         aktualny_czas = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        
         instrukcja_sys = TRYBY[wybrany_tryb]
         
-        # TARCZA ANTY-FEJKOWA
         instrukcja_sys += (
             f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
-            "\n\n--- TARCZA ANTY-FEJKOWA (ZERO HALUCYNACJI) ---\n"
-            "1. Jeśli użytkownik pyta o aktualne wiadomości, ceny, zjawiska na świecie, a w dostarczonym 'KONTEKŚCIE Z INTERNETU' nie ma konkretnych danych, MASZ ABSOLUTNY ZAKAZ ZMYŚLANIA FAKTÓW.\n"
-            "2. W takim przypadku powiedz krótko i szczerze: 'Niestety, moje systemy wyszukiwania nie znalazły dzisiaj weryfikowalnych informacji na ten temat'.\n"
-            "3. Nigdy nie tłumacz się 'wiedzą ograniczoną do 2023 r.' – masz po prostu powiedzieć, że sieć nie zwróciła wyników na to zapytanie."
+            "\n\n--- TARCZA ANTY-FEJKOWA ---\n"
+            "Jeśli użytkownik pyta o dzisiejsze wydarzenia lub ceny, oprzyj się TYLKO na sekcji 'AKTUALNE WYNIKI Z INTERNETU'. "
+            "Jeśli nie dostarczono żadnych wyników z sieci, przyznaj to wprost i absolutnie NIE ZMYŚLAJ faktów."
         )
         
         profil_usera = pobierz_profil(USER_ID)
@@ -360,11 +378,8 @@ if polecenie:
             placeholder.markdown(odpowiedz_finalna)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
         except Exception as e:
-            if "401" in str(e): st.warning("Klucz API Groq jest nieprawidłowy. Zaktualizuj go w ustawieniach Secrets.")
-            elif "429" in str(e): st.warning("Przekroczono limit zapytań do Groq. Odczekaj chwilę.")
-            else: st.warning(f"Serwer językowy natrafił na problem operacyjny. Spróbuj ponownie.")
+            st.error(f"❌ Problem z dostępem do API Groq. Komunikat z serwera: {e}. Sprawdź zakładkę Secrets.")
 
-        # BEZPIECZNE WYZWALACZE - Bez crashowania aplikacji
         if tts_mode and odpowiedz_finalna:
             try:
                 tts = gTTS(text=odpowiedz_finalna.replace("*", "").replace("#", ""), lang='pl')
@@ -376,12 +391,13 @@ if polecenie:
             try:
                 kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
                 kod = re.sub(r'```python|```', '', kod).strip()
-                st.markdown("**💻 Interpreter Pythona - Uruchomiony kod:**")
+                st.markdown("**💻 Interpreter Pythona (Z pamięcią stanu) - Uruchomiony kod:**")
                 st.code(kod, language="python")
                 f = io.StringIO()
-                with redirect_stdout(f): exec(kod)
+                with redirect_stdout(f): 
+                    exec(kod, st.session_state.python_env)
                 if f.getvalue(): st.info(f"**Wynik z serwera:**\n{f.getvalue()}")
-            except Exception as e: st.info(f"**Błąd wykonania kodu w piaskownicy:** {e}")
+            except Exception as e: st.error(f"**Błąd składniowy w wygenerowanym kodzie:** {e}")
 
         if "GENERATE_IMAGE:" in full_response:
             try:
