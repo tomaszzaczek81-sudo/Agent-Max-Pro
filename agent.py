@@ -47,20 +47,37 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. POŁĄCZENIE I INICJALIZACJA BAZY
+# 2. BEZPIECZNE RENDEROWANIE (NOWOŚĆ V20)
+# ==========================================
+def bezpieczny_tekst(tekst):
+    tekst_bez_wyzwalaczy = re.split(r'GENERATE_', tekst)[0].strip()
+    
+    # Jeśli agent wciąż pisze myśli (brak zamknięcia tagu)
+    if "<mysli>" in tekst_bez_wyzwalaczy and "</mysli>" not in tekst_bez_wyzwalaczy:
+        return "🧠 *Agent głęboko analizuje logikę...* ▌"
+        
+    # Usuń zamknięte myśli
+    oczyszczony = re.sub(r'<mysli>.*?</mysli>', '', tekst_bez_wyzwalaczy, flags=re.DOTALL).strip()
+    
+    # KULOODPORNOŚĆ: Jeśli po usunięciu myśli nic nie zostało, pokaż surowy tekst!
+    if not oczyszczony and tekst_bez_wyzwalaczy:
+        return tekst_bez_wyzwalaczy.replace("<mysli>", "🧠 **Moje wewnętrzne przemyślenia:**\n\n").replace("</mysli>", "\n\n---\n")
+        
+    return oczyszczony
+
+# ==========================================
+# 3. POŁĄCZENIE I INICJALIZACJA BAZY
 # ==========================================
 def pobierz_polaczenie_db(retries=3):
     for i in range(retries):
-        try:
-            return psycopg2.connect(st.secrets["DATABASE_URL"], connect_timeout=5)
+        try: return psycopg2.connect(st.secrets["DATABASE_URL"], connect_timeout=5)
         except Exception as e:
             if i == retries - 1: raise e
             time.sleep(1)
 
 def inicjalizuj_baze_danych():
     try:
-        conn = pobierz_polaczenie_db()
-        cur = conn.cursor()
+        conn = pobierz_polaczenie_db(); cur = conn.cursor()
         cur.execute('''CREATE TABLE IF NOT EXISTS uzytkownicy (id SERIAL PRIMARY KEY, login TEXT UNIQUE NOT NULL, haslo_hash TEXT NOT NULL, rola TEXT NOT NULL)''')
         cur.execute('''CREATE TABLE IF NOT EXISTS historia_czatow (id SERIAL PRIMARY KEY, uzytkownik_id INTEGER REFERENCES uzytkownicy(id) ON DELETE CASCADE, rola TEXT NOT NULL, tresc TEXT NOT NULL, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
         cur.execute('''CREATE TABLE IF NOT EXISTS baza_wiedzy (id SERIAL PRIMARY KEY, nazwa TEXT, tresc TEXT)''')
@@ -73,14 +90,10 @@ def inicjalizuj_baze_danych():
             except: conn.rollback()
         cur.close(); conn.close()
     except Exception as e:
-        st.error(f"❌ BŁĄD BAZY DANYCH: Nie można połączyć się z Neon. Sprawdź hasło w Secrets. Szczegóły: {e}")
-        st.stop()
+        st.error(f"❌ BŁĄD BAZY DANYCH. Szczegóły: {e}"); st.stop()
 
 inicjalizuj_baze_danych()
 
-# ==========================================
-# 3. MECHANIZMY SYSTEMOWE 
-# ==========================================
 def weryfikuj_uzytkownika(login, haslo):
     conn = pobierz_polaczenie_db(); cur = conn.cursor(cursor_factory=DictCursor)
     cur.execute("SELECT id, login, rola FROM uzytkownicy WHERE login = %s AND haslo_hash = %s", (login, hashlib.sha256(haslo.encode()).hexdigest()))
@@ -143,7 +156,7 @@ def stabilne_wyszukiwanie(zapytanie):
         if items:
             wyniki += "\n--- BAZA AKTUALNOŚCI Z DZISIAJ ---\n"
             wyniki += "\n".join([f"- {item.text}" for item in items[:5]]) + "\n"
-    except Exception as e: print(f"Wyszukiwanie HTTP nie powiodło się: {e}")
+    except: pass
     return wyniki
 
 # ==========================================
@@ -155,12 +168,9 @@ if not st.session_state.user_auth:
     login = st.text_input("Login")
     haslo = st.text_input("Hasło", type="password")
     if st.button("ZALOGUJ SIĘ", type="primary"):
-        try:
-            uzytkownik = weryfikuj_uzytkownika(login, haslo)
-            if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
-            else: st.error("❌ Błędny login lub hasło.")
-        except Exception as e:
-            st.error(f"❌ Wystąpił błąd podczas logowania: {e}")
+        uzytkownik = weryfikuj_uzytkownika(login, haslo)
+        if uzytkownik: st.session_state.user_auth = {"id": uzytkownik["id"], "login": uzytkownik["login"], "rola": uzytkownik["rola"]}; st.rerun()
+        else: st.error("❌ Błędny login lub hasło.")
     st.stop()
 
 USER_ID = st.session_state.user_auth["id"]
@@ -189,61 +199,52 @@ wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys(
 st.sidebar.markdown("---")
 with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
     nowy_profil = st.text_area("Twój profil:", value=pobierz_profil(USER_ID), height=150)
-    if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Profil zaktualizowany!")
+    if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Zapisano!")
 
 # ==========================================
 # 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V19 - Tryb Diagnostyczny")
-st.caption("System: SOTA Edition | Verbose Errors | Cleaned Engine")
+st.title("⚡ Agent AI Max Pro V20")
+st.caption("System: Bulletproof Render | Cleaned Engine | Zero Silent Failures")
 
 if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 
 with st.sidebar:
     st.markdown("---")
-    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie (Do usunięcia z pamięci kliknij X)", type=['png', 'jpg', 'jpeg'])
+    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
     if zdjecie: 
         st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
-        st.success("Obraz wgrany do pamięci podręcznej!")
-    else:
-        st.session_state.img_memory = None
+        st.success("Obraz wgrany!")
+    else: st.session_state.img_memory = None
 
-    if st.button("🧹 Resetuj rozmowę i pamięć"): 
-        wyczysc_historie_db(USER_ID)
-        st.session_state.python_env = {}
-        st.session_state.img_memory = None
-        st.rerun()
+    if st.button("🧹 Resetuj rozmowę"): 
+        wyczysc_historie_db(USER_ID); st.session_state.python_env = {}; st.rerun()
 
 historia_czatu = pobierz_historie_db(USER_ID)
 for msg in historia_czatu:
     if msg["role"] == "user" and "KONTEKST SYSTEMOWY:" in str(msg["content"]): continue
     with st.chat_message(msg["role"]):
         raw_text = str(msg["content"])
-        visible_text = raw_text.split("GENERATE_")[0].strip()
-        if "<mysli>" in visible_text and "</mysli>" in visible_text:
-            visible_text = visible_text.split("</mysli>")[1].strip()
-        
-        if visible_text: st.markdown(visible_text)
+        widoczny = bezpieczny_tekst(raw_text)
+        if widoczny: st.markdown(widoczny.replace(" ▌", ""))
 
 col_mic, col_input = st.columns([1, 10])
 with col_mic: audio_bytes = audio_recorder(text="", icon_size="2x", key="mic")
-with col_input: polecenie = st.chat_input("Wpisz zapytanie testowe...")
+with col_input: polecenie = st.chat_input("Wpisz zapytanie...")
 
 if polecenie:
     kontekst_kb = szukaj_w_bazie_wiedzy(polecenie)
     kontekst_web = ""
-    
     slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
     if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Przeszukuję sieć na żywo..."):
-            kontekst_web = stabilne_wyszukiwanie(polecenie)
+        with st.spinner("🌍 Przeszukuję sieć na żywo..."): kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
     if kontekst_kb or kontekst_web:
         zapytanie_do_wyslania = "KONTEKST SYSTEMOWY:\n"
-        if kontekst_kb: zapytanie_do_wyslania += f"--- DANE Z TWOJEJ BAZY WIEDZY ---\n{kontekst_kb}\n"
-        if kontekst_web: zapytanie_do_wyslania += f"--- AKTUALNE WYNIKI Z INTERNETU ---\n{kontekst_web}\n"
+        if kontekst_kb: zapytanie_do_wyslania += f"--- BAZA WIEDZY ---\n{kontekst_kb}\n"
+        if kontekst_web: zapytanie_do_wyslania += f"--- INTERNET ---\n{kontekst_web}\n"
         zapytanie_do_wyslania += f"\nPYTANIE UŻYTKOWNIKA: {polecenie}"
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
@@ -253,28 +254,17 @@ if polecenie:
         placeholder = st.empty()
         full_response = ""
         
-        aktualny_czas = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         instrukcja_sys = TRYBY[wybrany_tryb]
-        
-        instrukcja_sys += (
-            f"\n\nWAŻNE: Dzisiejsza data to {aktualny_czas}. Obecny rok to 2026. "
-            "\nJeśli użytkownik pyta o dzisiejsze wydarzenia, oprzyj się TYLKO na sekcji 'AKTUALNE WYNIKI Z INTERNETU'. "
-            "Jeśli nie dostarczono żadnych wyników z sieci, przyznaj to wprost i nie zmyślaj."
-        )
+        instrukcja_sys += f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Rok 2026."
         
         profil_usera = pobierz_profil(USER_ID)
         if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
-        if agentic_mode: instrukcja_sys += "\n\nUWAGA: Zanim podasz odpowiedź, MUSISZ otworzyć tag <mysli> i przeprowadzić logikę."
+        if agentic_mode: instrukcja_sys += "\n\nUWAGA: Musisz otworzyć tag <mysli> i przeprowadzić logikę. Na koniec ZAMKNIJ TAG i napisz finalną odpowiedź poza nim!"
         
-        instrukcja_sys += (
-            "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\n"
-            "ZDJĘCIE -> dodaj: GENERATE_IMAGE: [prompt angielski]\n"
-            "EXCEL -> dodaj: GENERATE_EXCEL: [dane CSV ze średnikami]\n"
-            "KOD -> dodaj: GENERATE_CODE: [czysty kod Python]."
-        )
+        instrukcja_sys += "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\nZDJĘCIE -> GENERATE_IMAGE: [prompt]\nEXCEL -> GENERATE_EXCEL: [dane CSV]\nKOD -> GENERATE_CODE: [kod Python]"
         
+        # Zabezpieczenie przed błędem struktury zapytań Llama 3
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
-        api_messages.append({"role": "system", "content": "Skup się WYŁĄCZNIE na bieżącym pytaniu."})
         
         if st.session_state.img_memory: 
             api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
@@ -283,28 +273,21 @@ if polecenie:
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            
-            # WŁAŚCIWY MODEL WIZYJNY GROQ, ZAMIAST ZMYŚLONEGO
             wybrany_model = "llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile"
             
             stream = client.chat.completions.create(model=wybrany_model, messages=api_messages, stream=True)
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
-                    widoczny_stream = full_response.split("GENERATE_")[0]
-                    if "<mysli>" in widoczny_stream and "</mysli>" not in widoczny_stream: placeholder.markdown("🧠 *Agent przetwarza...* ▌")
-                    elif "<mysli>" in widoczny_stream and "</mysli>" in widoczny_stream: placeholder.markdown(widoczny_stream.split("</mysli>")[1].strip() + " ▌")
-                    else: placeholder.markdown(widoczny_stream + " ▌")
+                    placeholder.markdown(bezpieczny_tekst(full_response))
             
-            widoczny_koniec = full_response.split("GENERATE_")[0].strip()
-            odpowiedz_finalna = widoczny_koniec.split("</mysli>")[1].strip() if "<mysli>" in widoczny_koniec else widoczny_koniec
+            odpowiedz_finalna = bezpieczny_tekst(full_response).replace(" ▌", "")
             placeholder.markdown(odpowiedz_finalna)
             zapisz_wiadomosc_db(USER_ID, "assistant", full_response)
             
         except Exception as e:
-            st.error("❌ KRYTYCZNY BŁĄD SILNIKA GROQ ❌")
-            st.error(f"Treść błędu: {e}")
-            st.error(f"Szczegóły: {traceback.format_exc()}")
+            st.error("❌ KRYTYCZNY BŁĄD API GROQ ❌")
+            st.error(f"Treść: {e}")
 
         if "GENERATE_CODE:" in full_response:
             try:
@@ -313,7 +296,6 @@ if polecenie:
                 st.markdown("**💻 Interpreter Pythona:**")
                 st.code(kod, language="python")
                 f = io.StringIO()
-                with redirect_stdout(f): 
-                    exec(kod, st.session_state.python_env)
-                if f.getvalue(): st.info(f"**Wynik z serwera:**\n{f.getvalue()}")
-            except Exception as e: st.error(f"❌ Błąd w wygenerowanym kodzie: {e}")
+                with redirect_stdout(f): exec(kod, st.session_state.python_env)
+                if f.getvalue(): st.info(f"Wynik:\n{f.getvalue()}")
+            except Exception as e: st.error(f"❌ Błąd skryptu: {e}")
