@@ -47,7 +47,7 @@ apple_theme_css = """
 st.markdown(apple_theme_css, unsafe_allow_html=True)
 
 # ==========================================
-# 2. BEZPIECZNE RENDEROWANIE
+# 2. BEZPIECZNE RENDEROWANIE ZNACZNIKÓW
 # ==========================================
 def bezpieczny_tekst(tekst):
     tekst_bez_wyzwalaczy = re.split(r'GENERATE_', tekst)[0].strip()
@@ -139,8 +139,37 @@ def zapisz_profil(user_id, profil):
     else: cur.execute("INSERT INTO preferencje_uzytkownika (uzytkownik_id, profil) VALUES (%s, %s)", (user_id, profil))
     conn.commit(); cur.close(); conn.close()
 
+# ==========================================
+# 4. POTĘŻNY HYBRYDOWY SILNIK WYSZUKIWANIA
+# ==========================================
 def stabilne_wyszukiwanie(zapytanie):
     wyniki = ""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+
+    # MODUŁ POGODOWY (Niezawodny API wttr.in)
+    if "pogod" in zapytanie.lower():
+        try:
+            miasto = "Wejherowo" # Domyślnie na podstawie Twojej lokalizacji
+            slowa = zapytanie.lower().split()
+            if "w" in slowa:
+                idx = slowa.index("w")
+                if idx + 1 < len(slowa): miasto = slowa[idx+1]
+            res_w = requests.get(f"https://wttr.in/{urllib.parse.quote(miasto)}?format=%l:+%C,+%t,+wiatr:+%w&M", timeout=4)
+            if res_w.status_code == 200:
+                wyniki += f"\n--- DANE POGODOWE ---\n{res_w.text}\n"
+        except: pass
+
+    # MODUŁ FAKTÓW (Skrapowanie HTML z DuckDuckGo)
+    try:
+        res_ddg = requests.get(f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(zapytanie)}", headers=headers, timeout=5)
+        soup = BeautifulSoup(res_ddg.text, 'html.parser')
+        snippets = soup.find_all('a', class_='result__snippet')
+        if snippets:
+            wyniki += "\n--- WYNIKI WYSZUKIWANIA Z INTERNETU ---\n"
+            wyniki += "\n".join([f"- {s.text}" for s in snippets[:4]]) + "\n"
+    except: pass
+
+    # MODUŁ WIADOMOŚCI (Google News RSS)
     try:
         url_news = f"https://news.google.com/rss/search?q={urllib.parse.quote(zapytanie)}&hl=pl&gl=PL&ceid=PL:pl"
         res_news = requests.get(url_news, timeout=5)
@@ -148,12 +177,13 @@ def stabilne_wyszukiwanie(zapytanie):
         items = root.findall('.//item/title')
         if items:
             wyniki += "\n--- BAZA AKTUALNOŚCI Z DZISIAJ ---\n"
-            wyniki += "\n".join([f"- {item.text}" for item in items[:5]]) + "\n"
+            wyniki += "\n".join([f"- {item.text}" for item in items[:4]]) + "\n"
     except: pass
+
     return wyniki
 
 # ==========================================
-# 4. INTERFEJS LOGOWANIA
+# 5. INTERFEJS LOGOWANIA
 # ==========================================
 if "user_auth" not in st.session_state: st.session_state.user_auth = None
 if not st.session_state.user_auth:
@@ -171,7 +201,7 @@ USER_LOGIN = st.session_state.user_auth["login"]
 USER_ROLA = st.session_state.user_auth["rola"]
 
 # ==========================================
-# 5. PANEL BOCZNY 
+# 6. PANEL BOCZNY 
 # ==========================================
 st.sidebar.title(f"👤 {USER_LOGIN} ({USER_ROLA})")
 if st.sidebar.button("Wyloguj", type="secondary"): st.session_state.user_auth = None; st.rerun()
@@ -189,17 +219,27 @@ TRYBY = {
 }
 wybrany_tryb = st.sidebar.selectbox("🎭 Osobistość Agenta", list(TRYBY.keys()))
 
+st.sidebar.markdown("---")
+with st.sidebar.expander("👤 Mój Profil (Pamięć)", expanded=False):
+    nowy_profil = st.text_area("Twój profil:", value=pobierz_profil(USER_ID), height=150)
+    if st.button("Zapisz w Pamięci Agenta"): zapisz_profil(USER_ID, nowy_profil); st.success("Zapisano!")
+
 # ==========================================
-# 6. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
+# 7. CZĘŚĆ GŁÓWNA I OBSŁUGA CZATU
 # ==========================================
-st.title("⚡ Agent AI Max Pro V21")
-st.caption("System: Zero-Excuses Engine | Forced Web Awareness | Anti-2023 Shield")
+st.title("⚡ Agent AI Max Pro V22")
+st.caption("System: Ultimate Hybrid Search | Weather Module | Unrestricted Core")
 
 if "python_env" not in st.session_state: st.session_state.python_env = {}
 if "img_memory" not in st.session_state: st.session_state.img_memory = None
 
 with st.sidebar:
     st.markdown("---")
+    zdjecie = st.file_uploader("👁️ Dodaj Zdjęcie", type=['png', 'jpg', 'jpeg'])
+    if zdjecie: 
+        st.session_state.img_memory = base64.b64encode(zdjecie.read()).decode('utf-8')
+        st.success("Obraz wgrany!")
+    else: st.session_state.img_memory = None
     if st.button("🧹 Resetuj rozmowę"): 
         wyczysc_historie_db(USER_ID); st.session_state.python_env = {}; st.rerun()
 
@@ -214,13 +254,14 @@ polecenie = st.chat_input("Wpisz zapytanie...")
 
 if polecenie:
     kontekst_web = ""
-    slowa_czasowe = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny"]
-    if any(s in polecenie.lower() for s in slowa_czasowe):
-        with st.spinner("🌍 Przeszukuję sieć na żywo..."): kontekst_web = stabilne_wyszukiwanie(polecenie)
+    slowa_wyszukiwania = ["dzisiaj", "dziś", "wczoraj", "jutro", "obecnie", "teraz", "2024", "2025", "2026", "wiadomości", "ceny", "pogoda", "pogodę"]
+    if any(s in polecenie.lower() for s in slowa_wyszukiwania):
+        with st.spinner("🌍 Przeszukuję sieć na żywo (Pogoda + Internet + Wiadomości)..."): 
+            kontekst_web = stabilne_wyszukiwanie(polecenie)
 
     zapytanie_do_wyslania = polecenie
     if kontekst_web:
-        zapytanie_do_wyslania = f"KONTEKST SYSTEMOWY:\n--- INTERNET ---\n{kontekst_web}\n\nPYTANIE UŻYTKOWNIKA: {polecenie}"
+        zapytanie_do_wyslania = f"KONTEKST SYSTEMOWY:\n--- DANE POBRANE Z SIECI ---\n{kontekst_web}\n\nPYTANIE UŻYTKOWNIKA: {polecenie}"
 
     zapisz_wiadomosc_db(USER_ID, "user", polecenie)
     with st.chat_message("user"): st.markdown(polecenie)
@@ -230,20 +271,27 @@ if polecenie:
         full_response = ""
         
         instrukcja_sys = TRYBY[wybrany_tryb]
-        
-        # TARCZA V21 - TOTALNY ZAKAZ WYMÓWEK
         instrukcja_sys += (
-            f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Mamy rok 2026. JESTEŚ ZAAWANSOWANYM SYSTEMEM Z DOSTĘPEM DO INTERNETU poprzez zintegrowane skrypty.\n"
-            "ABSOLUTNY ZAKAZ: Nigdy, pod żadnym pozorem nie używaj formułek typu 'jako agent AI nie mam dostępu do internetu', 'nie mogę sprawdzić dzisiejszych wiadomości' ani 'moje dane kończą się w 2023 roku'. "
-            "Jeśli nie dostałeś w KONTEKŚCIE danych na konkretne pytanie (np. lokalne ceny paliw), powiedz to rzeczowo: 'Niestety, moje skrypty wyszukujące nie znalazły w tej sekundzie precyzyjnych danych dla Twojego zapytania'. Następnie odpowiedz bazując na swojej wiedzy eksperckiej (bez zmyślania dzisiejszych statystyk). NIGDY nie zrzucaj winy na bycie sztuczną inteligencją."
+            f"\n\nWAŻNE: Dzisiejsza data to {datetime.datetime.now().strftime('%Y-%m-%d')}. Mamy rok 2026.\n"
+            "Odpowiadaj ZAWSZE rzeczowo, wykorzystując DANE POBRANE Z SIECI. NIGDY nie wymyślaj wymówek, że nie masz dostępu do internetu (bo te dane właśnie dostałeś)."
         )
         
+        profil_usera = pobierz_profil(USER_ID)
+        if profil_usera: instrukcja_sys += f"\n\nZASADY UŻYTKOWNIKA:\n{profil_usera}"
+        if agentic_mode: instrukcja_sys += "\n\nUWAGA: Musisz otworzyć tag <mysli> i przeprowadzić logikę. Na koniec ZAMKNIJ TAG i napisz finalną odpowiedź poza nim!"
+        
+        instrukcja_sys += "\n\n--- UKRYTE WYZWALACZE SYSTEMOWE ---\nZDJĘCIE -> GENERATE_IMAGE: [prompt]\nEXCEL -> GENERATE_EXCEL: [dane CSV]\nKOD -> GENERATE_CODE: [kod Python]"
+        
         api_messages = [{"role": "system", "content": instrukcja_sys}] + historia_czatu
-        api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
+        if st.session_state.img_memory: 
+            api_messages.append({"role": "user", "content": [{"type": "text", "text": zapytanie_do_wyslania}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.img_memory}"}}]})
+        else: 
+            api_messages.append({"role": "user", "content": zapytanie_do_wyslania})
 
         try:
             client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-            stream = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=api_messages, stream=True)
+            wybrany_model = "llama-3.2-11b-vision-preview" if st.session_state.img_memory else "llama-3.3-70b-versatile"
+            stream = client.chat.completions.create(model=wybrany_model, messages=api_messages, stream=True)
             for chunk in stream:
                 if chunk.choices[0].delta.content:
                     full_response += chunk.choices[0].delta.content
@@ -255,3 +303,14 @@ if polecenie:
             
         except Exception as e:
             st.error(f"❌ KRYTYCZNY BŁĄD API: {e}")
+
+        if "GENERATE_CODE:" in full_response:
+            try:
+                kod = full_response.split("GENERATE_CODE:")[1].split("GENERATE_")[0].strip()
+                kod = re.sub(r'```python|```', '', kod).strip()
+                st.markdown("**💻 Interpreter Pythona:**")
+                st.code(kod, language="python")
+                f = io.StringIO()
+                with redirect_stdout(f): exec(kod, st.session_state.python_env)
+                if f.getvalue(): st.info(f"Wynik:\n{f.getvalue()}")
+            except Exception as e: st.error(f"❌ Błąd skryptu: {e}")
